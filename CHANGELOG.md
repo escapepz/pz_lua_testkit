@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.2-20261119-0312] - 2026-11-19
+## [0.1.2-rc.202611190505] - 2026-11-19
 
 ### Added
 - **Gate 2 `require()` mod-roots parity (`PzKahluaRunner.java`):** Wired `mod.roots` into `_G.require` with a `Path.toRealPath()`-keyed execute-once cache shared with `loadMod()` auto-execution, `finally`-cleaned `inFlight` circular guard, path-traversal containment, and fallback to stock `GlobalObject.require` for vanilla classes.
@@ -33,6 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial public npm release (`pz_lua_testkit`) with Gate 1 (`pzspec`, clean-room stubs, `modloader`, `pzrequire`, `Umbrella` serve mode), `check_globals.lua` Lua 5.1 bytecode scanner, `sweep_consumers.lua`, and `.agents/skills/pz-lua-testkit/`.
 - Verified Gate 2 parity against local Project Zomboid B42 JAR (including `events_parity_spec.lua`).
 
-[Unreleased]: https://github.com/escapepz/pz_lua_testkit/compare/v0.1.2-20261119-0312...HEAD
-[0.1.2-20261119-0312]: https://github.com/escapepz/pz_lua_testkit/compare/v0.1.1...v0.1.2-20261119-0312
-[0.1.1]: https://github.com/escapepz/pz_lua_testkit/releases/tag/v0.1.1
+[Unreleased]: https://github.com/escapepz/pz_lua_testkit/compare/0.1.2-rc.202611190505...HEAD
+[0.1.2-rc.202611190505]: https://github.com/escapepz/pz_lua_testkit/compare/0.1.1...0.1.2-rc.202611190505
+[0.1.1]: https://github.com/escapepz/pz_lua_testkit/releases/tag/0.1.1
