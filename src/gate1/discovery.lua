@@ -36,10 +36,16 @@ local function normalizeSpecKey(p)
     return k
 end
 
+local function isRegularFile(p)
+    local f = io.open(p, "rb")
+    if not f then return false end
+    local _, err = f:read(1)
+    f:close()
+    return err == nil
+end
+
 local function resolveSpecPath(p, out, seen)
-    local f = io.open(p, "r")
-    if f then
-        f:close()
+    if isRegularFile(p) then
         local key = normalizeSpecKey(p)
         if not seen[key] then
             seen[key] = true

@@ -282,8 +282,13 @@ M.check = function(paths, opts)
     for _, path in ipairs(paths or {}) do
         local targets = {}
         local fh = io.open(path, "rb")
+        local is_file = false
         if fh then
+            local _, rerr = fh:read(1)
             fh:close()
+            is_file = (rerr == nil)
+        end
+        if is_file then
             targets[1] = path
         else
             local q = quoteShellPath(path)
