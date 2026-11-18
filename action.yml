@@ -77,6 +77,8 @@ runs:
     - name: Setup Lua 5.1 on macOS
       if: runner.os == 'macOS' && steps.cache-lua-macos.outputs.cache-hit != 'true'
       uses: xpol/setup-lua@v0.3
+      env:
+        CMAKE_POLICY_VERSION_MINIMUM: '3.5'
       with:
         lua-version: ${{ inputs.lua-version }}
 
