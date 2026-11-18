@@ -99,6 +99,13 @@ local function run(config)
     local modPath = cfg.mod_path
 
     local savedPath = package.path
+    local savedMeta = getmetatable(_G)
+    local savedStrict = rawget(_G, "pz_strict")
+    local function restoreHost()
+        rawset(_G, "pz_strict", savedStrict)
+        setmetatable(_G, savedMeta)
+        package.path = savedPath
+    end
 
     _G.PZ_GATE = "gate1"
 
@@ -202,7 +209,7 @@ local function run(config)
         for _, f in ipairs(modResult.load_files) do
             local ok, err = pcall(PzRequire.require_file, f)
             if not ok then
-                package.path = savedPath
+                restoreHost()
                 return reporter.fail_result("PZ_MOD LOAD FAIL", f, err)
             end
         end
@@ -222,20 +229,20 @@ local function run(config)
     table.sort(specs)
     if #specs == 0 then
         print("no spec files found")
-        package.path = savedPath
+        restoreHost()
         return { total = 0, passed = 0, failed = 0, ok = false }
     end
 
     for _, s in ipairs(specs) do
         local ok, err = pcall(dofile, s)
         if not ok then
-            package.path = savedPath
+            restoreHost()
             return reporter.fail_result("SPEC LOAD FAIL", s, err)
         end
     end
 
     local ok, stats = pzspec.run()
-    package.path = savedPath
+    restoreHost()
     return reporter.summarize(ok, stats)
 end
 

@@ -94,12 +94,23 @@ local function arityOf(args)
     return n
 end
 
+local function quoteShellPath(p)
+    if WINDOWS then
+        p = p:gsub("/", "\\")
+        if p:match('["\r\n|&^%%]') then return nil end
+        return '"' .. p .. '"'
+    end
+    return "'" .. p:gsub("'", "'\\''") .. "'"
+end
+
 local function libraryProbe(root)
+    local q = quoteShellPath(root .. "/library")
+    if not q then return false end
     local cmd
     if WINDOWS then
-        cmd = 'dir /b "' .. winPath(root) .. '\\library" 2>nul'
+        cmd = "dir /b " .. q .. " 2>nul"
     else
-        cmd = 'ls -1 "' .. root .. '/library" 2>/dev/null'
+        cmd = "ls -1 " .. q .. " 2>/dev/null"
     end
     local lines = listDir(cmd)
     return lines ~= nil and #lines > 0
@@ -248,11 +259,13 @@ function Umbrella.init(path)
 end
 
 local function buildStemPaths(root)
+    local q = quoteShellPath(WINDOWS and (root .. "/library/*.lua") or (root .. "/library"))
+    if not q then return {} end
     local cmd
     if WINDOWS then
-        cmd = 'dir /s /b "' .. winPath(root) .. '\\library\\*.lua" 2>nul'
+        cmd = "dir /s /b " .. q .. " 2>nul"
     else
-        cmd = 'find "' .. root .. '/library" -name "*.lua" -type f 2>/dev/null'
+        cmd = "find " .. q .. ' -name "*.lua" -type f 2>/dev/null'
     end
     local out = {}
     for _, line in ipairs(listDir(cmd) or {}) do

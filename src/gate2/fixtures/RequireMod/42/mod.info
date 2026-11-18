@@ -1,0 +1,3 @@
+name=RequireMod
+id=RequireMod
+require=DepA

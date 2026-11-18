@@ -1,10 +1,21 @@
+local function quoteShellPath(p)
+    if package.config:sub(1, 1) == "\\" then
+        p = p:gsub("/", "\\")
+        if p:match('["\r\n|&^%%]') then return nil end
+        return '"' .. p .. '"'
+    end
+    return "'" .. p:gsub("'", "'\\''") .. "'"
+end
+
 local function scanDir(dir, out)
     out = out or {}
+    local q = quoteShellPath(dir)
+    if not q then return out end
     local cmd
     if package.config:sub(1, 1) == "\\" then
-        cmd = 'dir /b /s "' .. dir .. '"'
+        cmd = "dir /b /s " .. q
     else
-        cmd = 'find "' .. dir .. '" -name "*_spec.lua" -type f'
+        cmd = "find " .. q .. ' -name "*_spec.lua" -type f'
     end
     local p = io.popen(cmd)
     if not p then return out end

@@ -1,9 +1,20 @@
+local function quoteShellPath(p)
+    if package.config:sub(1, 1) == "\\" then
+        p = p:gsub("/", "\\")
+        if p:match('["\r\n|&^%%]') then return nil end
+        return '"' .. p .. '"'
+    end
+    return "'" .. p:gsub("'", "'\\''") .. "'"
+end
+
 local function dirEntries(dir)
+    local q = quoteShellPath(dir)
+    if not q then return nil end
     local cmd
     if package.config:sub(1, 1) == "\\" then
-        cmd = 'dir /b "' .. (dir:gsub("/", "\\")) .. '" 2>nul'
+        cmd = "dir /b " .. q .. " 2>nul"
     else
-        cmd = 'ls -1 "' .. dir .. '" 2>/dev/null'
+        cmd = "ls -1 " .. q .. " 2>/dev/null"
     end
     local p = io.popen(cmd)
     if not p then return nil end
@@ -72,11 +83,13 @@ end
 
 local function listLuaFiles(dir)
     local out = {}
+    local q = quoteShellPath(dir)
+    if not q then return out end
     local cmd
     if package.config:sub(1, 1) == "\\" then
-        cmd = 'dir /b /s "' .. (dir:gsub("/", "\\")) .. '" 2>nul'
+        cmd = "dir /b /s " .. q .. " 2>nul"
     else
-        cmd = 'find "' .. dir .. '" -name "*.lua" -type f 2>/dev/null'
+        cmd = "find " .. q .. ' -name "*.lua" -type f 2>/dev/null'
     end
     local p = io.popen(cmd)
     if p then
@@ -102,9 +115,12 @@ local function readModInfoDeps(path)
         line = line:gsub("%s+$", "")
         local value = line:match("^require=(.*)$")
         if value then
-            value = value:gsub("\\", "")
-            for tok in value:gmatch("[^,]+") do
-                table.insert(deps, tok)
+            for tok in value:gmatch("[^,;]+") do
+                tok = tok:match("^%s*(.-)%s*$")
+                tok = tok:gsub("^\\+", "")
+                if tok ~= "" then
+                    table.insert(deps, tok)
+                end
             end
         end
     end
@@ -219,6 +235,7 @@ local function prepare_mod(mod_dir, ctx, mod_path)
         -- posture).
         local rejected = tok == "." or tok == ".."
             or tok:find("/", 1, true) ~= nil
+            or tok:find("\\", 1, true) ~= nil
             or tok:find(":", 1, true) ~= nil
             or tok:find('"', 1, true) ~= nil
         if rejected then

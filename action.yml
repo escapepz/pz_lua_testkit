@@ -1,5 +1,8 @@
 name: 'Setup pz_lua_testkit'
 description: 'Install PUC-Rio Lua 5.1.5 and expose pz_lua_testkit path for Project Zomboid B42 mod CI'
+branding:
+  icon: 'check-circle'
+  color: 'gray-dark'
 
 inputs:
   lua-version:
@@ -73,7 +76,7 @@ runs:
 
     - name: Setup Lua 5.1 on macOS
       if: runner.os == 'macOS' && steps.cache-lua-macos.outputs.cache-hit != 'true'
-      uses: xpol/setup-lua@v1
+      uses: xpol/setup-lua@v0.3
       with:
         lua-version: ${{ inputs.lua-version }}
 

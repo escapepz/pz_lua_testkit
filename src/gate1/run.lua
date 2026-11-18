@@ -55,6 +55,9 @@ while i <= #arg do
     elseif a:match("^%-%-mod=") then
         modDir = a:match("^%-%-mod=(.*)$")
         i = i + 1
+    elseif a:match("^%-%-") then
+        io.stderr:write("run.lua: unknown option: " .. a .. "\n")
+        os.exit(2)
     else
         table.insert(specArgs, a)
         i = i + 1

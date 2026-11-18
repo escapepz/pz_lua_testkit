@@ -142,7 +142,7 @@ If you installed `pz_lua_testkit` via `npm`/`pnpm`, `<kit-root>` is `<abs-mod-di
 ```bat
 javac -d build\gate2 -cp "%PZ_HOME%\projectzomboid.jar" <kit-root>\src\gate2\java\PzKahluaRunner.java
 cd /d "%PZ_HOME%"
-java -cp "%PZ_HOME%\projectzomboid.jar;<abs-mod-dir>\build\gate2" PzKahluaRunner <kit-root> --mod <abs-mod-dir> [--modpath <dir>[;<dir>...]] [--ctx sp|client|server]
+java -cp "%PZ_HOME%\projectzomboid.jar;<abs-mod-dir>\build\gate2" PzKahluaRunner <kit-root> --mod <abs-mod-dir> [--modpath <dir>[;<dir>...]] [--game-mods] [--ctx sp|client|server]
 ```
 
 From a git clone of `pz_lua_testkit`, you can also run the built-in Gate 2 self-tests:
@@ -154,8 +154,11 @@ java -cp "%PZ_HOME%\projectzomboid.jar;<repo-root>\build\gate2" PzKahluaRunner <
 ### Flags, Globals, and Exit Codes
 
 - `--mod <dir>` / `--mod=<dir>`: resolves B41 or B42 layout and auto-executes the mod's `media/lua` in engine load order before specs run (records `__PZ_MOD_INFO`).
-- `--modpath <dir>[;<dir>...]`: adds dependency mod search directories (require roots only, no auto-exec).
+- `--modpath <dir>[;<dir>...]`: adds ordered dependency mod search directories (`mod.info` `require=` tokens resolve transitively and contribute require roots only, no auto-exec).
+- `--game-mods`: opt-in fallback discovery in PZ user/Steam Workshop mod directories when a `mod.info` `require=` dependency is not found in `--modpath` (off by default).
 - `--ctx <sp|client|server>`: sets load context (default `sp`).
+- **`require()` resolution (`--mod`):** checks `mod.roots` first (primary mod roots + transitive `mod.info` `require=` dependency roots) using a shared path-keyed cache with `loadMod` auto-exec (preventing double execution and skipping circular `require` calls), then falls back to `GlobalObject.require`.
+- **`_G.testkit`:** `testkit.keep(...)` is a no-op; `testkit.provide(...)` and `testkit.resetLoaded(...)` fail fast with an error directing you to use `--modpath` or `--game-mods` in Gate 2.
 - Stamps `_G.PZ_GATE = "gate2"` (Gate 1 stamps `"gate1"`), allowing shared specs in `src/specs/` to branch when needed.
 - **Exit codes:** `0` = pass, `1` = suite or spec-load failure, `2` = usage error or zero specs found.
 
@@ -164,6 +167,7 @@ java -cp "%PZ_HOME%\projectzomboid.jar;<repo-root>\build\gate2" PzKahluaRunner <
 - **Working directory:** You must `cd` into `%PZ_HOME%` before running `java`, because the game's `J2SEPlatform` loads `stdlib.lua` relative to the JVM current working directory.
 - **Absolute spec paths:** Hand-passed spec file or directory arguments must be absolute paths (since the JVM CWD is `%PZ_HOME%`).
 - **Default specs:** Without `--mod`, there are no default spec directories (omitting spec arguments prints `no *_spec.lua files found` and exits `2`). With `--mod` and no explicit spec args, specs default to the mod's `TESTS` directories.
+- **Dual-gate event cleanup:** Specs shared across Gate 1 and Gate 2 must unregister any `Events.OnX.Add(fn)` listeners in `after_each` via `Events.OnX.Remove(fn)` — Gate 2 runs on real `Events` without per-spec sandboxing, so leaked listeners persist across specs.
 
 ---
 
@@ -188,7 +192,7 @@ jobs:
 
       - name: Setup pz_lua_testkit
         id: testkit
-        uses: escapepz/pz_lua_testkit@v0.1.1 # or @main
+        uses: escapepz/pz_lua_testkit@v0.1.2 # or @main
 
       - name: Run mod tests (strict)
         env:

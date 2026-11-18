@@ -263,6 +263,15 @@ end
 --   findings: sorted list of { file, line, name, kind = "read"|"write"|"event" }
 --   warnings: per-file warn lines (unreadable / not Lua / walk failure)
 --   opts: { stdlib = bool, known = set (overrides), events = set (overrides) }
+local function quoteShellPath(p)
+    if package.config:sub(1, 1) == "\\" then
+        p = p:gsub("/", "\\")
+        if p:match('["\r\n|&^%%]') then return nil end
+        return '"' .. p .. '"'
+    end
+    return "'" .. p:gsub("'", "'\\''") .. "'"
+end
+
 M.check = function(paths, opts)
     opts = opts or {}
     local warnings = {}
@@ -277,20 +286,23 @@ M.check = function(paths, opts)
             fh:close()
             targets[1] = path
         else
-            local listCmd
-            if package.config:sub(1, 1) == "\\" then
-                listCmd = 'dir /s /b "' .. path .. '"'
-            else
-                listCmd = 'find "' .. path .. '" -name "*.lua" -type f 2>/dev/null'
-            end
-            local ok, handle = pcall(io.popen, listCmd)
-            if ok and handle then
-                for line in handle:lines() do
-                    if line:sub(-4):lower() == ".lua" then
-                        targets[#targets + 1] = line
-                    end
+            local q = quoteShellPath(path)
+            if q then
+                local listCmd
+                if package.config:sub(1, 1) == "\\" then
+                    listCmd = "dir /s /b " .. q
+                else
+                    listCmd = "find " .. q .. ' -name "*.lua" -type f 2>/dev/null'
                 end
-                handle:close()
+                local ok, handle = pcall(io.popen, listCmd)
+                if ok and handle then
+                    for line in handle:lines() do
+                        if line:sub(-4):lower() == ".lua" then
+                            targets[#targets + 1] = line
+                        end
+                    end
+                    handle:close()
+                end
             end
             if #targets == 0 then warn("cannot open '" .. path .. "'") end
         end

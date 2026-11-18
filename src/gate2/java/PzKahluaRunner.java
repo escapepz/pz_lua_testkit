@@ -5,13 +5,21 @@ import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import se.krka.kahlua.converter.KahluaConverterManager;
 import se.krka.kahlua.j2se.J2SEPlatform;
 import se.krka.kahlua.luaj.compiler.LuaCompiler;
+import se.krka.kahlua.vm.JavaFunction;
+import se.krka.kahlua.vm.LuaCallFrame;
 import se.krka.kahlua.vm.KahluaTable;
 import se.krka.kahlua.vm.KahluaThread;
 import se.krka.kahlua.vm.LuaClosure;
@@ -46,6 +54,8 @@ import se.krka.kahlua.vm.Platform;
  *   --modpath <dir>[;<dir>...]     ordered dep search dirs — mod.info require=
  *                                  tokens resolve as <searchDir>/<token>/ and
  *                                  contribute require ROOTS ONLY (no auto-exec)
+ *   --game-mods                    opt-in fallback discovery in PZ user/Steam
+ *                                  Workshop mod directories when not in --modpath
  *   --ctx <sp|client|server>       load context (default "sp"): server
  *                                  executes shared+server only; sp/client
  *                                  executes shared+client+server; client/ is
@@ -57,6 +67,11 @@ import se.krka.kahlua.vm.Platform;
 public class PzKahluaRunner {
 
     private static final String[] SUBS = { "shared", "client", "server" };
+
+    private static final Set<String> loadedPaths = new HashSet<>();
+    private static final Map<String, Object> loadedValues = new HashMap<>();
+    private static final Set<String> inFlight = new HashSet<>();
+    private static Object stockRequire;
 
     private static final class ModInfo {
         final Path base;
@@ -82,15 +97,21 @@ public class PzKahluaRunner {
     }
 
     public static void main(String[] args) throws Exception {
+        loadedPaths.clear();
+        loadedValues.clear();
+        inFlight.clear();
+        stockRequire = null;
+
         if (args.length < 1) {
             System.err.println("usage: PzKahluaRunner <kitRoot> <spec-file-or-dir> [...]"
-                    + " [--mod <dir>] [--modpath <dir>[;<dir>...]] [--ctx <sp|client|server>]");
+                    + " [--mod <dir>] [--modpath <dir>[;<dir>...]] [--game-mods] [--ctx <sp|client|server>]");
             System.exit(2);
         }
         Path kitRoot = Path.of(args[0]).toAbsolutePath().normalize();
         List<Path> specArgs = new ArrayList<>();
         String modDir = null;
         List<String> modPathArg = new ArrayList<>();
+        boolean gameMods = false;
         String ctx = "sp";
         int explicitSpecArgs = 0;
         for (int i = 1; i < args.length; i++) {
@@ -106,6 +127,8 @@ public class PzKahluaRunner {
                 addModPathDirs(modPathArg, args[++i]);
             } else if (a.startsWith("--modpath=")) {
                 addModPathDirs(modPathArg, a.substring(10));
+            } else if (a.equals("--game-mods")) {
+                gameMods = true;
             } else if (a.equals("--ctx") && i + 1 < args.length
                     && !args[i + 1].startsWith("--")) {
                 ctx = args[++i];
@@ -142,11 +165,12 @@ public class PzKahluaRunner {
         installGlobalObject(cm, platform, env, thread);
 
         env.rawset("PZ_GATE", "gate2");
+        installTestkitFacade(platform, env);
 
         ModInfo mod = null;
         if (modDir != null && !modDir.isEmpty()) {
             mod = loadMod(Path.of(unquote(modDir)).toAbsolutePath().normalize(),
-                    ctx, modPathArg, thread, env);
+                    ctx, modPathArg, gameMods, thread, env);
         }
 
         Object[] inspectResult =
@@ -388,7 +412,7 @@ public class PzKahluaRunner {
 
     private static boolean isBareModId(String tok) {
         return !tok.isEmpty() && !tok.equals(".") && !tok.equals("..")
-                && !tok.contains("/") && !tok.contains(":")
+                && !tok.contains("/") && !tok.contains("\\") && !tok.contains(":")
                 && !tok.contains("\"");
     }
 
@@ -475,9 +499,13 @@ public class PzKahluaRunner {
         try {
             for (String line : Files.readAllLines(info,
                     java.nio.charset.StandardCharsets.ISO_8859_1)) {
-                line = line.replaceAll("\\s+$", "");
+                line = line.replace("\r", "").replaceAll("\\s+$", "");
                 if (line.startsWith("require=")) {
-                    for (String tok : line.substring(8).replace("\\", "").split(",")) {
+                    for (String tok : line.substring(8).split("[,;]")) {
+                        tok = tok.replace("\r", "").trim();
+                        while (tok.startsWith("\\")) {
+                            tok = tok.substring(1).trim();
+                        }
                         if (!tok.isEmpty()) {
                             deps.add(tok);
                         }
@@ -492,17 +520,122 @@ public class PzKahluaRunner {
         return deps;
     }
 
-    private static ModInfo loadMod(Path base, String ctx, List<String> modPathArg,
-            KahluaThread thread, KahluaTable env) {
-        Layout layout = resolveModLayout(base);
-        if (!layout.found()) {
-            System.out.println("PZ_MOD: mod.info not found in '" + norm(base) + "'");
+    private static String readModInfoId(Path info) {
+        if (info == null || !Files.isRegularFile(info)) {
             return null;
         }
+        try {
+            for (String line : Files.readAllLines(info,
+                    java.nio.charset.StandardCharsets.ISO_8859_1)) {
+                line = line.replace("\r", "").trim();
+                if (line.startsWith("id=")) {
+                    String id = line.substring(3).trim();
+                    return id.isEmpty() ? null : id;
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("PZ_MOD: mod.info unreadable in '"
+                    + norm(info) + "': " + e);
+        }
+        return null;
+    }
 
-        ModInfo mod = new ModInfo(base, ctx);
-        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+    private static String resolveModId(Layout layout, Path modBase) {
+        Path[] candidates = new Path[] {
+                layout != null ? layout.info : null,
+                modBase.resolve("common").resolve("mod.info"),
+                modBase.resolve("mod.info")
+        };
+        for (Path cand : candidates) {
+            String id = readModInfoId(cand);
+            if (id != null && !id.isEmpty()) {
+                return id;
+            }
+        }
+        return null;
+    }
 
+    private static List<Path> defaultGameModSearchDirs() {
+        List<Path> dirs = new ArrayList<>();
+        String prop = System.getProperty("pz.game.mods.dir", "");
+        if (!prop.isEmpty()) {
+            for (String entry : prop.split(";")) {
+                String trimmed = unquote(entry);
+                if (!trimmed.isEmpty()) {
+                    Path dir = Path.of(trimmed).toAbsolutePath().normalize();
+                    if (dirExists(dir)) {
+                        dirs.add(dir);
+                    }
+                }
+            }
+        }
+        String home = System.getProperty("user.home", "");
+        if (!home.isEmpty()) {
+            Path homePath = Path.of(home);
+            Path zMods = homePath.resolve("Zomboid").resolve("mods").toAbsolutePath().normalize();
+            if (dirExists(zMods)) {
+                dirs.add(zMods);
+            }
+            Path zWorkshop = homePath.resolve("Zomboid").resolve("Workshop").toAbsolutePath().normalize();
+            if (dirExists(zWorkshop)) {
+                dirs.add(zWorkshop);
+            }
+        }
+        Path steamWorkshop = Path.of(".").toAbsolutePath().normalize()
+                .resolve("..").resolve("..").resolve("workshop").resolve("content").resolve("108600")
+                .normalize();
+        if (dirExists(steamWorkshop)) {
+            dirs.add(steamWorkshop);
+        }
+        return dirs;
+    }
+
+    private static List<Path> listDirsSorted(Path dir) {
+        List<Path> out = new ArrayList<>();
+        try (Stream<Path> s = Files.list(dir)) {
+            s.filter(Files::isDirectory)
+             .sorted((a, b) -> a.getFileName().toString().compareTo(b.getFileName().toString()))
+             .forEach(out::add);
+        } catch (Exception e) {
+            // ignore unreadable directory
+        }
+        return out;
+    }
+
+    private static void indexModCandidate(Map<String, Layout> index, Path modBase) {
+        Layout layout = resolveModLayout(modBase);
+        if (!layout.found()) {
+            return;
+        }
+        String id = resolveModId(layout, modBase);
+        if (id != null && !id.isEmpty()) {
+            index.putIfAbsent(id, layout);
+        }
+    }
+
+    private static Map<String, Layout> buildGameModsIndex(List<Path> gameModBases) {
+        Map<String, Layout> index = new HashMap<>();
+        for (Path base : gameModBases) {
+            if (!dirExists(base)) {
+                continue;
+            }
+            for (Path child : listDirsSorted(base)) {
+                indexModCandidate(index, child);
+                for (Path workshopMods : new Path[] {
+                        child.resolve("mods"),
+                        child.resolve("Contents").resolve("mods") }) {
+                    if (dirExists(workshopMods)) {
+                        for (Path sub : listDirsSorted(workshopMods)) {
+                            indexModCandidate(index, sub);
+                        }
+                    }
+                }
+            }
+        }
+        return index;
+    }
+
+    private static void appendRoots(ModInfo mod, Layout layout, Set<String> seen) {
         for (String sub : SUBS) {
             for (Path d : layout.dirs) {
                 Path cand = d.resolve("media").resolve("lua").resolve(sub);
@@ -512,6 +645,20 @@ public class PzKahluaRunner {
                 }
             }
         }
+    }
+
+    private static ModInfo loadMod(Path base, String ctx, List<String> modPathArg,
+            boolean gameMods, KahluaThread thread, KahluaTable env) {
+        Layout layout = resolveModLayout(base);
+        if (!layout.found()) {
+            System.out.println("PZ_MOD: mod.info not found in '" + norm(base) + "'");
+            return null;
+        }
+
+        ModInfo mod = new ModInfo(base, ctx);
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+
+        appendRoots(mod, layout, seen);
 
         String[] loadSubs = "server".equals(ctx)
                 ? new String[] { "shared", "server" }
@@ -532,11 +679,22 @@ public class PzKahluaRunner {
         }
 
         mod.deps.addAll(readModInfoDeps(layout.info));
-        for (String tok : mod.deps) {
-            if (!isBareModId(tok)) {
+        Set<String> visitedModIds = new HashSet<>();
+        String rootId = resolveModId(layout, base);
+        if (rootId != null && !rootId.isEmpty()) {
+            visitedModIds.add(rootId);
+        }
+        Deque<String> queue = new ArrayDeque<>(mod.deps);
+        Map<String, Layout> gameModsIndex = null;
 
+        while (!queue.isEmpty()) {
+            String tok = queue.poll();
+            if (!isBareModId(tok)) {
                 System.out.println("PZ_MOD: dependency '" + tok
                         + "' is not a bare mod ID, skipped");
+                continue;
+            }
+            if (!visitedModIds.add(tok)) {
                 continue;
             }
             Layout dep = null;
@@ -545,21 +703,30 @@ public class PzKahluaRunner {
                 if (sdir.isEmpty()) {
                     continue;
                 }
-                dep = resolveModLayout(Path.of(sdir, tok).toAbsolutePath().normalize());
+                Path searchBase = Path.of(sdir).toAbsolutePath().normalize();
+                Path candBase = Path.of(sdir, tok).toAbsolutePath().normalize();
+                if (!candBase.startsWith(searchBase)) {
+                    continue;
+                }
+                dep = resolveModLayout(candBase);
                 if (dep.found()) {
                     break;
                 }
                 dep = null;
             }
+            if (dep == null && gameMods) {
+                if (gameModsIndex == null) {
+                    gameModsIndex = buildGameModsIndex(defaultGameModSearchDirs());
+                }
+                dep = gameModsIndex.get(tok);
+                if (dep != null) {
+                    System.out.println("[gate2] resolved require=" + tok + " -> " + norm(dep.info.getParent()));
+                }
+            }
             if (dep != null) {
-                for (String sub : SUBS) {
-                    for (Path d : dep.dirs) {
-                        Path cand = d.resolve("media").resolve("lua").resolve(sub);
-                        String cn = norm(cand);
-                        if (dirExists(cand) && seen.add(cn)) {
-                            mod.roots.add(cn);
-                        }
-                    }
+                appendRoots(mod, dep, seen);
+                for (String subDep : readModInfoDeps(dep.info)) {
+                    queue.add(subDep);
                 }
             } else {
                 System.out.println("PZ_MOD: dependency '" + tok
@@ -568,16 +735,131 @@ public class PzKahluaRunner {
         }
 
         recordModInfo(thread, env, mod);
+        installModRequire(thread, env, mod);
 
         for (String f : mod.loadFiles) {
             try {
-                loadLua(thread, Path.of(f), env);
+                loadAndCacheByPath(thread, env, Path.of(f));
             } catch (Throwable t) {
                 System.out.println("MOD LOAD FAIL " + f + ": " + t);
                 System.exit(1);
             }
         }
         return mod;
+    }
+
+    private static String realKey(Path p) throws java.io.IOException {
+        return p.toRealPath().toString().replace('\\', '/');
+    }
+
+    private static Object loadAndCacheByPath(KahluaThread thread, KahluaTable env, Path file)
+            throws Exception {
+        String key = realKey(file);
+        if (loadedPaths.contains(key)) {
+            return loadedValues.get(key);
+        }
+        if (inFlight.contains(key)) {
+            System.out.println("PZ_REQUIRE: circular require of '" + key + "' skipped");
+            return null;
+        }
+        inFlight.add(key);
+        try {
+            Object[] r = loadLua(thread, file, env);
+            Object val = (r != null && r.length > 1) ? r[1] : null;
+            loadedPaths.add(key);
+            loadedValues.put(key, val);
+            return val;
+        } finally {
+            inFlight.remove(key);
+        }
+    }
+
+    private static Path resolveInModRoots(ModInfo mod, String rawName) {
+        if (mod == null || rawName == null) {
+            return null;
+        }
+        String rel = rawName.replace('\\', '/');
+        while (rel.startsWith("./")) {
+            rel = rel.substring(2);
+        }
+        if (rel.endsWith(".lua")) {
+            rel = rel.substring(0, rel.length() - 4);
+        }
+        if (rel.isEmpty()) {
+            return null;
+        }
+        rel = rel + ".lua";
+        for (String rootStr : mod.roots) {
+            try {
+                Path rootReal = Path.of(rootStr).toRealPath();
+                Path cand = rootReal.resolve(rel);
+                if (Files.isRegularFile(cand)) {
+                    Path candReal = cand.toRealPath();
+                    if (candReal.startsWith(rootReal)) {
+                        return candReal;
+                    }
+                }
+            } catch (Exception ignored) {
+                // Ignore invalid paths or I/O errors and try next root.
+            }
+        }
+        return null;
+    }
+
+    private static void installModRequire(KahluaThread thread, KahluaTable env, ModInfo mod) {
+        stockRequire = env.rawget("require");
+        env.rawset("require", new JavaFunction() {
+            @Override
+            public int call(LuaCallFrame callFrame, int nArguments) {
+                Object arg0 = nArguments > 0 ? callFrame.get(0) : null;
+                if (arg0 instanceof String) {
+                    Path resolved = resolveInModRoots(mod, (String) arg0);
+                    if (resolved != null) {
+                        try {
+                            Object val = loadAndCacheByPath(thread, env, resolved);
+                            callFrame.push(val);
+                            return 1;
+                        } catch (RuntimeException re) {
+                            throw re;
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
+                }
+                if (stockRequire != null) {
+                    Object[] r = thread.pcall(stockRequire,
+                            nArguments > 0 ? new Object[] { arg0 } : new Object[0]);
+                    if (r != null && r.length > 0 && Boolean.FALSE.equals(r[0])) {
+                        throw new RuntimeException(r.length > 1 && r[1] != null
+                                ? r[1].toString() : "require failed");
+                    }
+                    callFrame.push(r != null && r.length > 1 ? r[1] : null);
+                    return 1;
+                }
+                callFrame.push(null);
+                return 1;
+            }
+        });
+    }
+
+    private static void installTestkitFacade(Platform platform, KahluaTable env) {
+        KahluaTable tk = platform.newTable();
+        tk.rawset("keep", new JavaFunction() {
+            @Override
+            public int call(LuaCallFrame callFrame, int nArguments) {
+                return 0;
+            }
+        });
+        JavaFunction gate1Only = new JavaFunction() {
+            @Override
+            public int call(LuaCallFrame callFrame, int nArguments) {
+                throw new RuntimeException(
+                        "testkit.provide/resetLoaded are Gate 1 unit-isolation primitives; use --modpath or --game-mods in Gate 2");
+            }
+        };
+        tk.rawset("provide", gate1Only);
+        tk.rawset("resetLoaded", gate1Only);
+        env.rawset("testkit", tk);
     }
 
     private static String luaStr(String s) {

@@ -57,12 +57,23 @@ local function normalizeKey(p)
     return k
 end
 
+local function quoteShellPath(p)
+    if package.config:sub(1, 1) == "\\" then
+        p = p:gsub("/", "\\")
+        if p:match('["\r\n|&^%%]') then return nil end
+        return '"' .. p .. '"'
+    end
+    return "'" .. p:gsub("'", "'\\''") .. "'"
+end
+
 local function dirHasEntries(dir)
+    local q = quoteShellPath(dir)
+    if not q then return false end
     local cmd
     if package.config:sub(1, 1) == "\\" then
-        cmd = 'dir /b "' .. (dir:gsub("/", "\\")) .. '" 2>nul'
+        cmd = "dir /b " .. q .. " 2>nul"
     else
-        cmd = 'ls -1 "' .. dir .. '" 2>/dev/null'
+        cmd = "ls -1 " .. q .. " 2>/dev/null"
     end
     local p = io.popen(cmd)
     if not p then return false end
