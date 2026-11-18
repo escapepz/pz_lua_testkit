@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pz_lua_testkit
+        id: testkit
+        uses: ./
+
+      - name: Run Gate 1 suite
+        run: ${{ steps.testkit.outputs.lua-bin }} src/gate1/run.lua
+
+      - name: Run Gate 1 suite (strict)
+        run: PZ_STRICT=1 ${{ steps.testkit.outputs.lua-bin }} src/gate1/run.lua
+
+      - name: Run Gate 1 mod fixture
+        run: ${{ steps.testkit.outputs.lua-bin }} src/gate1/run.lua --mod src/gate2/fixtures/MyMod
+
+      - name: Verify VERSION matches package.json
+        run: |
+          node -e "const fs=require('fs'),v=fs.readFileSync('VERSION','utf8').trim(),p=require('./package.json').version; if(v!==p){console.error('Mismatch:',v,p);process.exit(1)} console.log('Version OK:',v)"
+
+      - name: Verify npm pack dry-run
+        run: npm pack --dry-run
+
+  cross-platform:
+    needs: ubuntu
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pz_lua_testkit
+        id: testkit
+        uses: ./
+
+      - name: Run Gate 1 suite (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ${{ steps.testkit.outputs.lua-bin }} src/gate1/run.lua
+
+      - name: Run Gate 1 suite strict (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: $env:PZ_STRICT = "1"; ${{ steps.testkit.outputs.lua-bin }} src/gate1/run.lua
+
+      - name: Run Gate 1 mod fixture (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ${{ steps.testkit.outputs.lua-bin }} src/gate1/run.lua --mod src/gate2/fixtures/MyMod
+
+      - name: Run Gate 1 suite (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: ${{ steps.testkit.outputs.lua-bin }} src/gate1/run.lua
+
+      - name: Run Gate 1 suite strict (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: PZ_STRICT=1 ${{ steps.testkit.outputs.lua-bin }} src/gate1/run.lua
+
+      - name: Run Gate 1 mod fixture (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: ${{ steps.testkit.outputs.lua-bin }} src/gate1/run.lua --mod src/gate2/fixtures/MyMod

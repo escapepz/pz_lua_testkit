@@ -1,0 +1,28 @@
+{
+    "name": "pz_lua_testkit",
+    "version": "0.1.1",
+    "description": "Offline-first, mock-first test toolkit for Project Zomboid B42 Lua mods — plain Lua 5.1, two gates (pure-Lua CI + real-jar Kahlua), Jest-like DSL. Ships no binaries: the Lua 5.1 interpreter is user-provisioned.",
+    "license": "MIT",
+    "keywords": [
+        "project-zomboid",
+        "lua",
+        "testing",
+        "test-framework",
+        "mock",
+        "kahlua"
+    ],
+    "files": [
+        "src/pzspec.lua",
+        "src/gate1/",
+        "src/gate2/java/",
+        "src/check/",
+        "src/vendor/",
+        ".agents/skills/pz-lua-testkit/",
+        "README.md",
+        "docs/specs-and-mocking.md",
+        "docs/mod-loader-and-stubs.md",
+        "docs/reference.md",
+        "LICENSE",
+        "VERSION"
+    ]
+}

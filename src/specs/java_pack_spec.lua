@@ -1,0 +1,176 @@
+local GATE1 = (rawget(_G, "PZ_GATE") == "gate1")
+
+if GATE1 and rawget(_G, "ArrayList") == nil then
+    pcall(require, "java")
+end
+
+local function javaPackPath()
+    for entry in package.path:gmatch("[^;]+") do
+        local cand = entry:gsub("%?", "java")
+        if cand:match("stubs[/\\]java%.lua$") then return cand end
+    end
+    return nil
+end
+
+describe("java pack — stdlib extensions (both gates)", function()
+    it("table.isempty: true iff the table has no entries", function()
+        expect(table.isempty({})).toBeTruthy()
+        expect(table.isempty({ 1 })).toBeFalsy()
+        expect(table.isempty({ a = 1 })).toBeFalsy()
+    end)
+
+    it("table.wipe: clears in place and returns falsy (real gate2 wipe returns nil)", function()
+        local w = { 1, 2, x = 3 }
+        local ret = table.wipe(w)
+        expect(ret).toBeFalsy()
+        expect(table.isempty(w)).toBeTruthy()
+    end)
+
+    it("table.newarray: fresh array seeded with its args (newarray(5) is {5}, not capacity)", function()
+        local a = table.newarray()
+        expect(type(a)).toBe("table")
+        expect(#a).toBe(0)
+        expect(table.newarray(1, 2, 3)).toEqual({ 1, 2, 3 })
+        local c = table.newarray(5)
+        expect(#c).toBe(1)
+        expect(c[1]).toBe(5)
+    end)
+
+    it("string.trim: strips leading/trailing whitespace", function()
+        expect(string.trim("  a b  ")).toBe("a b")
+        expect(string.trim("\t z\n")).toBe("z")
+        expect(string.trim("")).toBe("")
+        expect(string.trim("x")).toBe("x")
+        expect(string.trim("   ")).toBe("")
+    end)
+
+    it("string.split: plain separators, Java String.split trailing-empty drop", function()
+        expect(string.split("a,b,c", ",")).toEqual({ "a", "b", "c" })
+        expect(string.split("a,,c", ",")).toEqual({ "a", "", "c" })
+        expect(string.split("abc", ",")).toEqual({ "abc" })
+        expect(string.split(",a,", ",")).toEqual({ "", "a" })
+        expect(string.split("a,", ",")).toEqual({ "a" })
+        expect(string.split(",,", ",")).toEqual({})
+        expect(string.split("", ",")).toEqual({ "" })
+    end)
+
+    it("string.split: empty sep is per-char, multi-char sep, regex-meta sep matches gate2", function()
+        expect(string.split("a,b", "")).toEqual({ "a", ",", "b" })
+        expect(string.split("aXXb", "XX")).toEqual({ "a", "b" })
+
+        expect(#string.split("a.b", ".")).toBe(0)
+    end)
+
+    it("string.contains: literal substring test, empty needle is true", function()
+        expect(string.contains("hello", "ell")).toBeTruthy()
+        expect(string.contains("hello", "x")).toBeFalsy()
+        expect(string.contains("hello", "")).toBeTruthy()
+        expect(string.contains("", "")).toBeTruthy()
+        expect(string.contains("ab", "ab")).toBeTruthy()
+    end)
+
+    it("table exts: non-table args error (both gates; throw-vs-success only)", function()
+
+        expect(function() return table.isempty(5) end).toThrow()
+        expect(function() return table.isempty(nil) end).toThrow()
+        expect(function() return table.wipe(nil) end).toThrow()
+    end)
+
+    it("string exts: number args coerce like gate2's converter (trim(5) -> \"5\")", function()
+
+        expect(string.trim(5)).toBe("5")
+        expect(string.split(5, ",")).toEqual({ "5" })
+        expect(string.contains(5, "a")).toBeFalsy()
+    end)
+
+    it("string exts: nil/boolean args error (throw-vs-success only, NOT message wording)", function()
+
+        expect(function() return string.trim(nil) end).toThrow()
+        expect(function() return string.trim(true) end).toThrow()
+        expect(function() return string.split("a", nil) end).toThrow()
+        expect(function() return string.contains("a", nil) end).toThrow()
+    end)
+end)
+
+if GATE1 then
+
+    describe("java pack — constructors + getn (gate1-only)", function()
+        it("ArrayList: plan-pinned 0-indexed get, size, isEmpty, contains; add returns self", function()
+            local list = ArrayList.new()
+            list:add("a")
+            list:add("b")
+            expect(list:get(0)).toBe("a")
+            expect(list:get(1)).toBe("b")
+            expect(list:size()).toBe(2)
+            expect(list:contains("a")).toBeTruthy()
+            expect(list:contains("z")).toBeFalsy()
+            expect(list:isEmpty()).toBeFalsy()
+            local empty = ArrayList.new()
+            expect(empty:size()).toBe(0)
+            expect(empty:isEmpty()).toBeTruthy()
+            local chained = ArrayList.new()
+            expect(chained:add("q")).toBe(chained)
+            expect(chained:get(0)).toBe("q")
+        end)
+
+        it("ArrayList:get out of range throws (Java IndexOutOfBounds contract)", function()
+            local list = ArrayList.new()
+            list:add("a")
+            expect(function() return list:get(1) end).toThrow()
+            expect(function() return list:get(-1) end).toThrow()
+        end)
+
+        it("HashMap: put returns previous value, get nil-on-miss, containsKey, size", function()
+            local map = HashMap.new()
+            expect(map:put("k", "v1")).toBeNil()
+            expect(map:put("k", "v2")).toBe("v1")
+            expect(map:get("k")).toBe("v2")
+            expect(map:get("missing")).toBeNil()
+            expect(map:containsKey("k")).toBeTruthy()
+            expect(map:containsKey("nope")).toBeFalsy()
+            expect(map:size()).toBe(1)
+            map:put("k2", false)
+            expect(map:containsKey("k2")).toBeTruthy()
+            expect(map:get("k2")).toBeFalsy()
+            expect(map:size()).toBe(2)
+        end)
+
+        it("Vector2f: x/y fields, length ~= 2.2360679 (plan-pinned), lengthSquared, zero-arg ctor", function()
+            local v = Vector2f.new(1, 2)
+            expect(v.x).toBe(1)
+            expect(v.y).toBe(2)
+            expect(v:length()).toBeCloseTo(2.2360679)
+            expect(v:lengthSquared()).toBe(5)
+            local zero = Vector2f.new()
+            expect(zero.x).toBe(0)
+            expect(zero.y).toBe(0)
+            expect(zero:length()).toBe(0)
+        end)
+
+        it("Vector3f: x/y/z fields, length, lengthSquared", function()
+            local v = Vector3f.new(1, 2, 2)
+            expect(v.x).toBe(1)
+            expect(v.y).toBe(2)
+            expect(v.z).toBe(2)
+            expect(v:length()).toBe(3)
+            expect(v:lengthSquared()).toBe(9)
+        end)
+
+        it("table.getn: alias of # semantics (gate1-only: real gate2 has no table.getn)", function()
+            expect(table.getn({ 10, 20, 30 })).toBe(3)
+            expect(table.getn({})).toBe(0)
+            expect(table.getn({ a = 1 })).toBe(0)
+        end)
+
+        it("pack double-load is idempotent: dofile twice, no error, globals intact", function()
+            local path = javaPackPath()
+            expect(type(path)).toBe("string")
+            dofile(path)
+            dofile(path)
+            local l = ArrayList.new()
+            l:add("x")
+            expect(l:get(0)).toBe("x")
+            expect(table.isempty({})).toBeTruthy()
+        end)
+    end)
+end

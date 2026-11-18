@@ -1,0 +1,105 @@
+name: 'Setup pz_lua_testkit'
+description: 'Install PUC-Rio Lua 5.1.5 and expose pz_lua_testkit path for Project Zomboid B42 mod CI'
+
+inputs:
+  lua-version:
+    description: 'Lua 5.1 version for macOS xpol/setup-lua'
+    required: false
+    default: '5.1.5'
+
+outputs:
+  testkit-path:
+    description: 'Path to the pz_lua_testkit repository root'
+    value: ${{ github.action_path }}
+  lua-bin:
+    description: 'Lua 5.1 executable name (lua5.1 on Linux/Windows, lua on macOS)'
+    value: ${{ steps.set-lua-bin.outputs.lua-bin }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Lua 5.1 on Linux
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y lua5.1 && lua5.1 -v
+
+    - name: Cache Lua 5.1 on Windows
+      if: runner.os == 'Windows'
+      id: cache-lua-win
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/lua
+        key: ${{ runner.os }}-${{ runner.arch }}-lua51-5.1.5
+
+    - name: Install Lua 5.1 on Windows
+      if: runner.os == 'Windows' && steps.cache-lua-win.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        choco install lua51 --version=5.1.5 -y
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $chocoRoot = if ($env:ChocolateyInstall) { $env:ChocolateyInstall } else { "C:\ProgramData\chocolatey" }
+        $luaTools = Join-Path $chocoRoot "lib\lua51\tools"
+        if (-not (Test-Path (Join-Path $luaTools "lua5.1.exe"))) { throw "lua5.1.exe not found in $luaTools" }
+        $dest = Join-Path "${{ runner.temp }}" "lua"
+        New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        Copy-Item -Path (Join-Path $luaTools "lua5.1.exe") -Destination $dest -Force
+        Copy-Item -Path (Join-Path $luaTools "*.dll") -Destination $dest -Force
+        Copy-Item -Path (Join-Path $luaTools "*.manifest") -Destination $dest -Force
+        $crtDir = Join-Path $luaTools "Microsoft.VC80.CRT"
+        if (Test-Path $crtDir) {
+          Copy-Item -Path $crtDir -Destination (Join-Path $dest "Microsoft.VC80.CRT") -Recurse -Force
+        }
+
+    - name: Add Lua 5.1 to PATH and verify on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $dest = Join-Path "${{ runner.temp }}" "lua"
+        if (-not (Test-Path (Join-Path $dest "lua5.1.exe"))) { throw "lua5.1.exe not found in $dest" }
+        $dest | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        $env:PATH = "$dest;$env:PATH"
+        lua5.1 -v
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    - name: Cache Lua on macOS
+      if: runner.os == 'macOS'
+      id: cache-lua-macos
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/lua
+        key: ${{ runner.os }}-${{ runner.arch }}-lua-${{ inputs.lua-version }}
+
+    - name: Setup Lua 5.1 on macOS
+      if: runner.os == 'macOS' && steps.cache-lua-macos.outputs.cache-hit != 'true'
+      uses: xpol/setup-lua@v1
+      with:
+        lua-version: ${{ inputs.lua-version }}
+
+    - name: Move Lua out of workspace on macOS
+      if: runner.os == 'macOS' && steps.cache-lua-macos.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        rm -rf "${{ runner.temp }}/lua"
+        mv "${{ github.workspace }}/.lua" "${{ runner.temp }}/lua"
+
+    - name: Add Lua to PATH on macOS
+      if: runner.os == 'macOS'
+      shell: bash
+      run: echo "${{ runner.temp }}/lua/bin" >> "$GITHUB_PATH"
+
+    - name: Verify Lua on macOS
+      if: runner.os == 'macOS'
+      shell: bash
+      run: lua -v
+
+    - name: Set lua-bin output
+      id: set-lua-bin
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" = "macOS" ]; then
+          echo "lua-bin=lua" >> "$GITHUB_OUTPUT"
+        else
+          echo "lua-bin=lua5.1" >> "$GITHUB_OUTPUT"
+        fi

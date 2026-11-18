@@ -1,0 +1,16 @@
+build/
+tools/
+*.class
+*.jar
+.superpowers/
+.zcode/
+.tmp/
+.worktrees/
+.lua/
+debug.log
+
+# IP tripwires: nothing from the game or a local Umbrella clone is ever
+# committed (jar/decompiled Java blocked above; a cloned Umbrella root has
+# library/ at its top level)
+library/
+dist/

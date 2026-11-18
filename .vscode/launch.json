@@ -1,0 +1,14 @@
+{
+    "version": "0.1.1",
+    "configurations": [
+        {
+            "name": "Debug pzspec",
+            "type": "lua",
+            "request": "launch",
+            "luaVersion": "lua51",
+            "program": "${workspaceFolder}/src/gate1/run.lua",
+            "cwd": "${workspaceFolder}",
+            "stopOnEntry": false
+        }
+    ]
+}
