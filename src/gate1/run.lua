@@ -2,8 +2,9 @@
 -- the actual run live in runner.lua, which is also loadable by consumers)
 -- Usage: lua5.1.exe src/gate1/run.lua [--mod <mod_dir>] [spec_file_or_dir ...]
 --
--- Exit codes: 0 = suite passed, 2 = no spec files found or CLI usage error,
--- 1 = spec load fail or suite failed.
+-- Exit codes: 0 = suite passed, 2 = no spec files found, CLI usage error, or
+-- mod setup failure (e.g. missing mod.info), 1 = spec load fail or suite
+-- failed.
 --
 -- Mod mode (--mod <dir> or --mod=<dir>): loads the mod under test — its
 -- mod.info (B41 single root or B42 common/ + <versionDir>/ dual layout)

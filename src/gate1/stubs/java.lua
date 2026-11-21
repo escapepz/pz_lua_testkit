@@ -155,11 +155,22 @@ local function newMap()
     local map = {}
     function map:put(k, v)
         local previous = store[k]
-        store[k] = v
+        if type(previous) == "table" and previous.__java_null_value then
+            previous = nil
+        end
+        if v == nil then
+            store[k] = { __java_null_value = true }
+        else
+            store[k] = v
+        end
         return previous
     end
     function map:get(k)
-        return store[k]
+        local entry = store[k]
+        if type(entry) == "table" and entry.__java_null_value then
+            return nil
+        end
+        return entry
     end
     function map:containsKey(k)
         return store[k] ~= nil

@@ -1,11 +1,6 @@
-local function quoteShellPath(p)
-    if package.config:sub(1, 1) == "\\" then
-        p = p:gsub("/", "\\")
-        if p:match('["\r\n|&^%%]') then return nil end
-        return '"' .. p .. '"'
-    end
-    return "'" .. p:gsub("'", "'\\''") .. "'"
-end
+local quoteShellPath = dofile(
+    (debug.getinfo(1, "S").source:sub(2):match("^(.*)[/\\]") or ".")
+        .. "/shellpath.lua").quote
 
 local function scanDir(dir, out)
     out = out or {}

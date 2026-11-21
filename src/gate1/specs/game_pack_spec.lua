@@ -56,9 +56,9 @@ if GATE1 then
             expect(type(inv)).toBe("table")
             expect(#p.getInventory.calls >= 1).toBeTruthy()
             local items = inv:getItems()
-            local count = 0
-            for _ in pairs(items) do count = count + 1 end
-            expect(count).toBe(0)
+            expect(items:size()).toBe(0)
+            expect(function() items:get(0) end).toThrow()
+            expect(function() items:get(-1) end).toThrow()
 
             expect(p:getPlayerNum()).toBe(0)
             expect(p:isAdmin()).toBeFalsy()

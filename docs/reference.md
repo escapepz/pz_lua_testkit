@@ -105,13 +105,13 @@ Resolution follows **`config > env > default`** (implemented in `src/gate1/confi
 
 ### `src/check/check_globals.lua`
 
-Static unknown-global and unknown-event scanner. Compiles target `.lua` files with `loadfile` and `string.dump`, then walks the Lua 5.1 bytecode to report exact file and line numbers for unknown global reads/writes and unknown `Events.<Name>` accesses.
+Static unknown-global and unknown-event scanner. Compiles target `.lua` files with `loadfile` and `string.dump`, then walks the Lua 5.1 bytecode to report exact file and line numbers for unknown global reads/writes and unknown `Events.<Name>` / `Hook.<Name>` accesses (each event finding carries an additive `registry` field).
 
 ```bat
 tools\lua5.1.exe src\check\check_globals.lua <file-or-dir>... [--stdlib]
 ```
 
-- `--stdlib`: harvests globals from `src/gate1/stubs/core.lua` in addition to the Lua 5.1 `BASELINE` globals. Events are checked against `src/gate1/stubs/events_list.lua`. (`PZ_UMBRELLA` symbols are out of scope.)
+- `--stdlib`: harvests globals from `src/gate1/stubs/core.lua` in addition to the Lua 5.1 `BASELINE` globals. Events are checked against the `events` set and hooks against the `hooks` set of the split shape in `src/gate1/stubs/events_list.lua` (`{ events = {...}, hooks = {...} }`; an old `names`-only shape fails closed with one warn). (`PZ_UMBRELLA` symbols are out of scope.)
 - Also loadable as a module: `local cg = dofile("src/check/check_globals.lua"); local findings, warnings = cg.check(paths, { stdlib = true })`.
 - **Exit codes:** `0` = clean, `1` = unknown globals or events found, `2` = usage error.
 
@@ -192,7 +192,7 @@ jobs:
 
       - name: Setup pz_lua_testkit
         id: testkit
-        uses: escapepz/pz_lua_testkit@0.1.2-rc.202611190505 # or @main
+        uses: escapepz/pz_lua_testkit@0.2.1-rc.202611211559
 
       - name: Run mod tests (strict)
         env:
@@ -231,7 +231,7 @@ jobs:
    ```yaml
    - name: Run mod test shim
      env:
-       PZ_TESTKIT_DIR: ${{ steps.testkit.outputs.testkit-path }} # example consumer-defined var read by your TESTS/run.lua
+       PZ_TESTKIT_DIR: ${{ steps.testkit.outputs.testkit-path }}
      run: ${{ steps.testkit.outputs.lua-bin }} TESTS/run.lua
    ```
 

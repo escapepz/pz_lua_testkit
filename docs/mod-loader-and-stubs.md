@@ -27,7 +27,7 @@ When `--mod` is set, the runner:
 - **B42 dual layout**: otherwise, if `<modDir>/common/mod.info` or `<modDir>/<versionDir>/mod.info` exists, the loader uses `common/` and `<versionDir>/` (in that order, when present).
   - `<versionDir>` is the numeric-named subdirectory with the highest integer value (for example `42`).
   - `mod.info` is read from `<modDir>/<versionDir>/mod.info` first, falling back to `<modDir>/common/mod.info`.
-- **Missing `mod.info`**: if neither layout has a `mod.info`, the runner prints `PZ_MOD: mod.info not found in '<dir>'` and leaves mod mode off.
+- **Missing `mod.info`**: if neither layout has a `mod.info`, the runner prints `PZ_MOD: mod.info not found in '<dir>'` and fails the run as a setup error (exit 2) — it does NOT fall back to running the kit's own self-test suite.
 
 ### Engine Load Order & Contexts
 

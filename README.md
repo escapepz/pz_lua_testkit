@@ -37,7 +37,7 @@ lua5.1 -v
 **Via npm / pnpm (recommended):**
 
 ```bash
-pnpm add -D pz_lua_testkit   # or: npm i -D pz_lua_testkit
+pnpm add -D pz_lua_testkit
 ```
 
 Optionally add a `"test"` script to your mod's `package.json`:

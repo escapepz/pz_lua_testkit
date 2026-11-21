@@ -1,11 +1,6 @@
-local function quoteShellPath(p)
-    if package.config:sub(1, 1) == "\\" then
-        p = p:gsub("/", "\\")
-        if p:match('["\r\n|&^%%]') then return nil end
-        return '"' .. p .. '"'
-    end
-    return "'" .. p:gsub("'", "'\\''") .. "'"
-end
+local quoteShellPath = dofile(
+    (debug.getinfo(1, "S").source:sub(2):match("^(.*)[/\\]") or ".")
+        .. "/shellpath.lua").quote
 
 local function dirEntries(dir)
     local q = quoteShellPath(dir)
@@ -35,8 +30,9 @@ end
 local function fileExists(path)
     local f = io.open(path, "r")
     if f then
+        local _, rerr = f:read(1)
         f:close()
-        return true
+        return rerr == nil
     end
     return false
 end
@@ -66,8 +62,6 @@ local function absPath(p)
     return root .. table.concat(parts, "/")
 end
 
--- <versionDir> = child dir whose name parses as a number, highest wins
--- (engine getModVersionDirName; working default lands on "42")
 local function numericVersionDir(base)
     local best, bestN = nil, nil
     for _, name in ipairs(dirEntries(base) or {}) do
@@ -87,7 +81,7 @@ local function listLuaFiles(dir)
     if not q then return out end
     local cmd
     if package.config:sub(1, 1) == "\\" then
-        cmd = "dir /b /s " .. q .. " 2>nul"
+        cmd = "dir /b /s /a:-d " .. q .. " 2>nul"
     else
         cmd = "find " .. q .. ' -name "*.lua" -type f 2>/dev/null'
     end
@@ -104,9 +98,6 @@ local function listLuaFiles(dir)
     return out
 end
 
--- mod.info require= line (engine ChooseGameInfo.java: strip prefix, remove
--- "\", split ",", trim empties). Fixture mod.info files mirror the observed
--- key shapes (title=, require=) with invented values.
 local function readModInfoDeps(path)
     local deps = {}
     local f = io.open(path, "r")
@@ -128,13 +119,6 @@ local function readModInfoDeps(path)
     return deps
 end
 
--- layout resolution shared by the own mod and every dep-scan hit:
--- <dir>/mod.info -> B41 single layout {dir}; else dual when <dir>/common/
--- mod.info OR <dir>/<versionDir>/mod.info exists (ZomboidFileSystem.java:492;
--- <versionDir> = numeric child, highest wins — getModVersionDirName);
--- returns the ordered layout dirs (common before version) + the preferred
--- mod.info path (versionDir first — ChooseGameInfo.java:196-199), or nil
--- when neither info file exists
 local function resolveModLayout(base)
     if fileExists(base .. "/mod.info") then
         return { base }, base .. "/mod.info"
@@ -225,14 +209,6 @@ local function prepare_mod(mod_dir, ctx, mod_path)
     local searchDirs = (type(mod_path) == "table") and mod_path or {}
     for _, tok in ipairs(deps) do
         local depDirs = nil
-        -- data-guard (gate2 PzKahluaRunner parity): a require= token is
-        -- mod.info DATA and must be a bare mod ID (one path segment) —
-        -- slashes, drive colons, or bare "."/".." would escape the search
-        -- dirs (absPath collapses "..") and read deps from outside
-        -- PZ_MOD_PATH; a double quote would break out of the dir-listing
-        -- shell commands (dir /b "<path>" — cmd.exe cannot escape a quote
-        -- inside a quoted token). ONE reject warn + skip (stub-by-default
-        -- posture).
         local rejected = tok == "." or tok == ".."
             or tok:find("/", 1, true) ~= nil
             or tok:find("\\", 1, true) ~= nil

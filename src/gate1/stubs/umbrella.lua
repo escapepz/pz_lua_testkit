@@ -94,14 +94,9 @@ local function arityOf(args)
     return n
 end
 
-local function quoteShellPath(p)
-    if WINDOWS then
-        p = p:gsub("/", "\\")
-        if p:match('["\r\n|&^%%]') then return nil end
-        return '"' .. p .. '"'
-    end
-    return "'" .. p:gsub("'", "'\\''") .. "'"
-end
+local quoteShellPath = dofile(
+    (debug.getinfo(1, "S").source:sub(2):match("^(.*)[/\\]") or ".")
+        .. "/../shellpath.lua").quote
 
 local function libraryProbe(root)
     local q = quoteShellPath(root .. "/library")
@@ -115,9 +110,6 @@ local function libraryProbe(root)
     local lines = listDir(cmd)
     return lines ~= nil and #lines > 0
 end
-
--- ONLY; cleared whenever the mode goes off). REAL FORMAT (canonical clone
--- library/events.lua, observed 2026-11-13): the file declares the container
 
 local events_cache = nil
 
@@ -146,8 +138,8 @@ function Umbrella.events_lookup(name)
     if not declared[name] then return false end
 
     local list = _G.__pz_events_list
-    if type(list) == "table" and type(list.names) == "table" then
-        local names = list.names
+    if type(list) == "table" and type(list.events) == "table" then
+        local names = list.events
         local known = false
         for _, n in ipairs(names) do
             if n == name then known = true break end
@@ -304,19 +296,6 @@ function Umbrella.stem_index()
     end
     return stem_index
 end
-
--- parse_class_file(filepath) -> descriptor
-
--- Rules (mirroring the observed clone shapes):
---   * the FIRST ---@class line is the file's primary class; later ---@class
-
---   * methods: "function <recv>:name(args) end" / "function recv.name(args)"
-
---   * "---@return RAW" lines bind to the NEXT function declaration; a blank
-
---   * is_global: a bare global assignment whose target equals the class name
-
---   * fields: "---@field name T" lines of the primary class, plus primary-class
 
 function Umbrella.parse_class_file(filepath)
     local lines = readLines(filepath)
@@ -750,8 +729,6 @@ local FIXTURE_FILES = {
         "function strsplit(sep, s) end",
         "",
     }, "\n"),
-    -- mirrors: the canonical clone's library/events.lua SHAPE (Task 4;
-
     ["events.lua"] = table.concat({
         "---@meta _",
         "Events = {}",

@@ -35,7 +35,12 @@ jobs:
           node -e "const fs=require('fs'),v=fs.readFileSync('VERSION','utf8').trim(),p=require('./package.json').version; if(v!==p){console.error('Mismatch:',v,p);process.exit(1)} console.log('Version OK:',v)"
 
       - name: Verify npm pack dry-run
-        run: npm pack --dry-run
+        run: |
+          npm pack --dry-run | tee pack_manifest.txt
+          for p in src/gate1/run.lua src/gate1/shellpath.lua src/gate2/java/PzKahluaRunner.java .agents/skills/pz-lua-testkit/SKILL.md VERSION; do
+            grep -q "$p" pack_manifest.txt || { echo "MISSING from npm package: $p"; exit 1; }
+          done
+          rm pack_manifest.txt
 
   cross-platform:
     needs: ubuntu

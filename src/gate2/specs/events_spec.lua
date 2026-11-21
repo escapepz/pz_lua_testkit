@@ -9,9 +9,17 @@ describe("gate2 Events registry", function()
         local names = {
             "OnGameStart", "OnGameBoot", "OnInitGlobalModData",
             "OnPlayerUpdate", "OnFillInventoryObjectContextMenu",
+            "EveryOneMinute", "ReceiveSafehouseInvite", "RequestTrade",
         }
         for _, n in ipairs(names) do
             expect(type(Events[n])).toBe("table")
         end
+    end)
+
+    it("Hook.UseItem is accessible on the real Hook registry", function()
+        expect(type(rawget(_G, "Hook"))).toBe("table")
+        expect(type(Hook.UseItem)).toBe("table")
+        expect(type(Hook.UseItem.Add)).toBe("function")
+        expect(type(Hook.UseItem.Remove)).toBe("function")
     end)
 end)

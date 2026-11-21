@@ -31,7 +31,10 @@
 --               installed, the mod's own Lua auto-executes in engine
 --               LoadDirBase order (ctx-driven), and specs default to the
 --               mod's TESTS dirs (mod mode off / unset: runner path
---               unchanged — _G.require stays std, no _G.testkit)
+--               unchanged — _G.require stays std, no _G.testkit). Setup
+--               failure (mod.info missing -> prepare_mod nil) returns the
+--               zero-total failure result (exit 2), never the kit
+--               self-test default
 --   mod_path   = ordered dep mod search dirs (default {}; env PZ_MOD_PATH,
 --               ";"-separated via splitEnv): each mod.info require= token
 --               is looked up as <searchDir>/<token>/ (same layout rule as
@@ -64,7 +67,9 @@
 -- run() NEVER calls os.exit: hosts own the process. The CLI entry (run.lua)
 -- maps the result to exit codes via reporter.exit_code (reporter.lua): the
 -- frozen formula reads only the result table — ok -> 0, zero specs -> 2,
--- else 1.
+-- else 1. A mod-setup failure (mod set, prepare_mod nil) returns the
+-- zero-total result -> exit 2 (modloader printed the reason; runner prints
+-- nothing extra).
 
 local SOURCE = debug.getinfo(1, "S").source:sub(2)
 local ROOT = SOURCE:match("^(.*)[/\\][^/\\]*$") or "."
@@ -217,6 +222,11 @@ local function run(config)
 
     wire_reset(cfg, modResult ~= nil)
 
+    if mod and modResult == nil then
+        restoreHost()
+        return { total = 0, passed = 0, failed = 0, ok = false }
+    end
+
     if #specArgs == 0 then
         if modResult then
             specArgs = modResult.spec_dirs
@@ -241,9 +251,12 @@ local function run(config)
         end
     end
 
-    local ok, stats = pzspec.run()
+    local run_ok, pass, stats = pcall(pzspec.run)
     restoreHost()
-    return reporter.summarize(ok, stats)
+    if not run_ok then
+        error(pass, 0)
+    end
+    return reporter.summarize(pass, stats)
 end
 
 function wire_reset(config, installed)

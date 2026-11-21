@@ -49,6 +49,7 @@ PzRequire._persistent = {}
 PzRequire._std = nil
 
 local installed = false
+local WINDOWS = package.config:sub(1, 1) == "\\"
 
 local function normalizeKey(p)
     local k = p:gsub("\\", "/")
@@ -57,14 +58,35 @@ local function normalizeKey(p)
     return k
 end
 
-local function quoteShellPath(p)
-    if package.config:sub(1, 1) == "\\" then
-        p = p:gsub("/", "\\")
-        if p:match('["\r\n|&^%%]') then return nil end
-        return '"' .. p .. '"'
+local function cacheKey(p)
+    local k = normalizeKey(p)
+    local parts = {}
+    for seg in k:gmatch("[^/]+") do
+        if seg ~= "." then
+            parts[#parts + 1] = WINDOWS and seg:lower() or seg
+        end
     end
-    return "'" .. p:gsub("'", "'\\''") .. "'"
+    return table.concat(parts, "/")
 end
+
+local function normalizedName(name)
+    local n = normalizeKey(name)
+    if n:match("%.lua$") == nil then
+        n = n .. ".lua"
+    end
+    return n
+end
+
+local function isTraversal(name)
+    for seg in normalizeKey(name):gmatch("[^/]+") do
+        if seg == ".." then return true end
+    end
+    return false
+end
+
+local quoteShellPath = dofile(
+    (debug.getinfo(1, "S").source:sub(2):match("^(.*)[/\\]") or ".")
+        .. "/../shellpath.lua").quote
 
 local function dirHasEntries(dir)
     local q = quoteShellPath(dir)
@@ -101,23 +123,27 @@ function PzRequire.init(roots)
 end
 
 function PzRequire.resolve(name)
-    local n = normalizeKey(name)
-    if n:match("%.lua$") == nil then
-        n = n .. ".lua"
+    if isTraversal(name) then
+        print("PZ_REQUIRE: rejected '..' traversal in '" .. normalizeKey(name) .. "'")
+        return nil
     end
+    local n = normalizedName(name)
     for _, root in ipairs(PzRequire._roots) do
         local cand = root .. "/" .. n
         local f = io.open(cand, "r")
         if f then
+            local _, rerr = f:read(1)
             f:close()
-            return normalizeKey(cand)
+            if rerr == nil then
+                return cacheKey(cand)
+            end
         end
     end
     return nil
 end
 
 function PzRequire.require_file(abs_path)
-    local key = normalizeKey(abs_path)
+    local key = cacheKey(abs_path)
     if PzRequire._done[key] then
         return PzRequire._value[key]
     end
@@ -141,14 +167,21 @@ function PzRequire.require_file(abs_path)
 end
 
 function PzRequire.require(name)
+    if type(name) == "string" and isTraversal(name) then
+        print("PZ_REQUIRE: rejected '..' traversal in '" .. normalizeKey(name) .. "'")
+        return nil
+    end
     if type(name) == "string" then
-        local pkey = "provided:" .. normalizeKey(name)
+        local pkey = "provided:" .. cacheKey(name)
         if PzRequire._done[pkey] then
             return PzRequire._value[pkey]
         end
     end
     local path = type(name) == "string" and PzRequire.resolve(name) or nil
     if not path then
+        if type(name) == "string" and isTraversal(name) then
+            return nil
+        end
         print("PZ_REQUIRE: module not found '" .. tostring(name) .. "'")
         return nil
     end
@@ -156,7 +189,7 @@ function PzRequire.require(name)
 end
 
 function PzRequire.provide(name, value)
-    local key = "provided:" .. normalizeKey(tostring(name))
+    local key = "provided:" .. cacheKey(tostring(name))
     PzRequire._done[key] = true
     PzRequire._value[key] = value
     PzRequire._persistent[key] = true
@@ -198,13 +231,29 @@ function PzRequire.reset()
 end
 
 function PzRequire.reset_events()
+    rawset(_G, "_pz_logs", {})
+    local is_dispatcher = rawget(_G, "__pz_is_dispatcher")
+    if type(is_dispatcher) ~= "function" then
+        print("PZ_REQUIRE: __pz_is_dispatcher missing — reset_events falling back to duck-typed clearing")
+        for _, reg_name in ipairs({ "Events", "Hook" }) do
+            local reg = rawget(_G, reg_name)
+            if type(reg) == "table" then
+                for k, v in pairs(reg) do
+                    if type(k) == "string" and k:match("^On")
+                        and type(v) == "table" and type(v.Clear) == "function" then
+                        v.Clear()
+                    end
+                end
+            end
+        end
+        return
+    end
     for _, reg_name in ipairs({ "Events", "Hook" }) do
         local reg = rawget(_G, reg_name)
         if type(reg) == "table" then
-            for k, v in pairs(reg) do
-                if type(k) == "string" and k:match("^On")
-                    and type(v) == "table" and type(v.Clear) == "function" then
-                    v.Clear()
+            for _, v in pairs(reg) do
+                if is_dispatcher(v) then
+                    v:Clear()
                 end
             end
         end

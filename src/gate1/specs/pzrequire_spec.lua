@@ -91,6 +91,7 @@ describe("pzrequire contract require", function()
         __FIX_CLI = nil
         __FIX_SRV = nil
         __FIX_GREETER = nil
+        __FIX_TRAVERSAL = nil
     end)
 
     it("(a) install: _G.require swapped, testkit facade created, _std saved once (idempotent)", function()
@@ -246,14 +247,17 @@ describe("pzrequire contract require", function()
         expect(__FIX_GREETER).toBe(true)
         expect(Events.OnFixtureTick._count()).toBe(1)
 
+        local saved_strict = _G.pz_strict
+        _G.pz_strict = false
         Hook.OnFixtureTick.Add(function() end)
+        _G.pz_strict = saved_strict
         expect(Hook.OnFixtureTick._count()).toBe(1)
         PzRequire.reset_events()
         expect(Events.OnFixtureTick._count()).toBe(0)
         expect(Hook.OnFixtureTick._count()).toBe(0)
 
         local have = false
-        for _, n in ipairs(_G.__pz_events_list.names) do
+        for _, n in ipairs(_G.__pz_events_list.events) do
             if n == "OnFixtureTick" then have = true end
         end
         expect(have).toBeTruthy()
@@ -264,6 +268,98 @@ describe("pzrequire contract require", function()
         PzRequire.reset()
         require("shared/greeter")
         expect(Events.OnFixtureTick._count()).toBe(1)
+    end)
+
+    it("(l2) traversal: '..' as a path segment of the require name soft-fails with the exact message, one warn, nothing executed", function()
+        PzRequire.init({ U })
+        local decoy = io.open(FIX .. "/mod_a/media/escape.lua", "wb")
+        if decoy then
+            decoy:write("__FIX_TRAVERSAL = true\n")
+            decoy:close()
+        end
+        local s = spyOn(_G, "print")
+        local ok1 = pcall(function()
+            local r1 = require("shared/../../escape")
+            expect(r1).toBeNil()
+        end)
+        expect(ok1).toBeTruthy()
+        expect(s.calls[1] and s.calls[1][1]).toBe("PZ_REQUIRE: rejected '..' traversal in 'shared/../../escape'")
+        expect(#s.calls).toBe(1)
+
+        local ok2 = pcall(function()
+            local r2 = require("a/..")
+            expect(r2).toBeNil()
+        end)
+        expect(ok2).toBeTruthy()
+        expect(s.calls[2] and s.calls[2][1]).toBe("PZ_REQUIRE: rejected '..' traversal in 'a/..'")
+
+        local ok3 = pcall(function()
+            local r3 = require("..")
+            expect(r3).toBeNil()
+        end)
+        expect(ok3).toBeTruthy()
+        expect(s.calls[3] and s.calls[3][1]).toBe("PZ_REQUIRE: rejected '..' traversal in '..'")
+
+        local ok4 = pcall(function()
+            local r4 = require("a..b")
+            expect(r4).toBeNil()
+        end)
+        expect(ok4).toBeTruthy()
+        expect(s.calls[4] and s.calls[4][1]).toBe("PZ_REQUIRE: module not found 'a..b'")
+        expect(#s.calls).toBe(4)
+        expect(rawget(_G, "__FIX_TRAVERSAL")).toBeNil()
+        s.restore()
+
+        local u = require("shared/util")
+        expect(u.marker).toBe("util")
+    end)
+
+    it("(l3) identity reset: non-On dispatcher cleared, parked non-dispatcher table with Clear survives", function()
+        PzRequire.init({ U })
+        LuaEventManager.AddEvent("MyEvent")
+        local ev = Events.MyEvent
+        ev.Add(function() end)
+        local parked_cleared = false
+        local parked = { Clear = function() parked_cleared = true end }
+        rawset(_G.Events, "ParkedThing", parked)
+        expect(ev._count()).toBe(1)
+        PzRequire.reset_events()
+        expect(ev._count()).toBe(0)
+        expect(parked_cleared).toBeFalsy()
+        expect(rawget(_G.Events, "ParkedThing")).toBe(parked)
+        rawset(_G.Events, "ParkedThing", nil)
+    end)
+
+    it("(l4) traversal reject wins over provide seeds: one warn, seed not served", function()
+        PzRequire.init({ U })
+        PzRequire.provide("../x", { seeded = true })
+        local s = spyOn(_G, "print")
+        local r = require("../x")
+        s.restore()
+        expect(r).toBeNil()
+        expect(s.calls[1] and s.calls[1][1]).toBe("PZ_REQUIRE: rejected '..' traversal in '../x'")
+        expect(#s.calls).toBe(1)
+    end)
+
+    it("(l5) cache key canonicalization: ./ and // (and case on Windows) share one execution", function()
+        PzRequire.init({ U })
+        __FIX_UTIL_N = 0
+        require("shared/./util")
+        require("shared//util")
+        require("Shared/Util")
+        local WINDOWS = package.config:sub(1, 1) == "\\"
+        expect(__FIX_UTIL_N).toBe(WINDOWS and 1 or 2)
+        local u = require("shared/util")
+        expect(u.marker).toBe("util")
+        expect(__FIX_UTIL_N).toBe(WINDOWS and 1 or 2)
+    end)
+
+    it("(l6) reset_events clears the _pz_logs capture list", function()
+        PzRequire.init({ U })
+        writeLog("TEST", "captured")
+        expect(#_pz_logs >= 1).toBeTruthy()
+        PzRequire.reset_events()
+        expect(#_pz_logs).toBe(0)
     end)
 
     it("(m) reset: dropped entries re-execute exactly once; in-flight cleared", function()

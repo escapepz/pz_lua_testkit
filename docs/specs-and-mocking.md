@@ -30,13 +30,11 @@ describe("InventoryHelper", function()
         end)
 
         xit("skips unfinished case", function()
-            -- xit is a no-op
         end)
     end)
 end)
 
 xdescribe("temporarily disabled suite", function()
-    -- xdescribe is a no-op
 end)
 ```
 
@@ -53,7 +51,6 @@ describe("craft queue", function()
     local queue
 
     before_all(function()
-        -- one-time suite setup
     end)
 
     before_each(function()
@@ -65,7 +62,6 @@ describe("craft queue", function()
     end)
 
     after_all(function()
-        -- one-time suite teardown
     end)
 
     it("starts empty", function()
@@ -133,7 +129,7 @@ When running in mod mode (`--mod`), the runner replaces `_G.require` with the co
 | --- | --- |
 | `testkit.provide(name, value)` | Seeds a persistent module entry (`provided:<name>`) that takes precedence over disk lookup and survives `testkit.resetLoaded()`. Use this to stub optional or dependency mods. |
 | `testkit.keep(name)` | Marks an already-loaded module as persistent so its cached return value survives `testkit.resetLoaded()`. |
-| `testkit.resetLoaded()` | Clears non-persistent entries from the `require` cache and clears all `Events.On*` / `Hook.On*` listeners (the known event-name allowlist is preserved). |
+| `testkit.resetLoaded()` | Clears non-persistent entries from the `require` cache and clears every stub-created `Events` / `Hook` dispatcher regardless of key name (factory-identity based — hand-built event-like tables parked on the registries are NOT cleared; the known event-name allowlist is preserved). |
 | `testkit.std_require(name)` | Calls Lua's original `require` directly, bypassing the mod `require` cache. |
 
 > **Important (`testkit.keep` and event listeners):** `keep()` preserves the module **cache entry only**. Any `Events.*` or `Hook.*` listeners registered at module load time are still cleared by `testkit.resetLoaded()`. Register listeners inside a dedicated init function or re-register them in `before_each`.
@@ -173,7 +169,6 @@ Because mod files auto-execute in engine load order (`shared` -> `client` -> `se
    ```lua
    LuaEventManager.AddEvent("OnMyModInitialized")
    Events.OnMyModInitialized.Add(function()
-       -- handler
    end)
    ```
 

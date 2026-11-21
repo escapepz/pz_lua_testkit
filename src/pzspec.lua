@@ -22,7 +22,6 @@ local function currentSuite()
     return pzspec._current or newSuite("(root)")
 end
 
--- describe(name, fn): group tests; nesting flattens names with " > "
 function describe(name, fn)
     local parent = pzspec._current
     local label = parent and (parent.name .. " > " .. name) or name
@@ -169,9 +168,6 @@ function expect_eq(actual, expected, msg)
 end
 _G.expect_eq = expect_eq
 
--- mock(impl?) -> callable recording calls; .calls = {{args={...}}, n=n}
--- impl=nil: calls are recorded and the call returns nil; unknown-field reads
--- return nil (plain Lua — no auto-methods; a self-referential __index loops).
 function mock(impl)
     local m = { calls = {}, _impl = impl }
     local f = function(...)
@@ -225,6 +221,8 @@ local function runSuite(suite)
             pzspec.stats.failed = pzspec.stats.failed + 1
             pzspec.stats.total = pzspec.stats.total + 1
             print("FAIL " .. suite.name .. " <before_all>: " .. tostring(err))
+            print("  SKIP " .. suite.name .. " :: "
+                .. #suite.tests .. " tests skipped (before_all failed)")
             return
         end
     end

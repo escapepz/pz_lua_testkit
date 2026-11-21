@@ -19,11 +19,21 @@ Tasks 6–8 consume these lists verbatim. One line per member; facts only.
 Java types and stdlib extensions the mock layers touch. Short list — the mods' test
 mocks are almost pure Lua.
 
-- `list` (java.util.List shape): `size()` and `get(i)` with 0-based `i` — JASM
+- `list` (java.util.List shape): `size()` and `get(i)` with 0-based `i` and the Java
+  bounds throw (`IndexOutOfBoundsException` outside `0..size-1`, both gates' list shapes)
+  — JASM
   (returned by ItemContainer `getItems()` and `getItemsFromCategory(category)`; real JASM
   code calls `:size()` / `:get(i)` on results). CAF and MAF never touch Java collections.
-- No HashMap, Vector2f, Vector3f or any other Java type is constructed or called by any of
-  the three mock layers — nothing else to stub.
+  The java pack also ships `ArrayList` (java.util.ArrayList shape: add-returns-self, 0-based
+  `get` with the Java bounds throw, `isEmpty`, `contains`), `HashMap` (put-returns-previous,
+  get-nil-on-miss, containsKey, nil VALUES stored per the Java null-value contract —
+  containsKey true, get nil; null KEYS are a residual divergence, put(nil, ·) errors),
+  and `Vector2f` / `Vector3f` (x/y[/z] fields default 0,
+  length, lengthSquared) — java.lua, gate1-only globals (`## gate2 alignment notes`).
+- Members the mods reference that ship as pzmocks in game.lua: `ModData.addCopy` /
+  `ModData.purge` (no-op recorders), `ScriptManager.getScript` / `ScriptManager.getItem` /
+  `ScriptManager.FetchAll` (empty-table pzmocks; `ScriptManager.instance.getItem` returns
+  the 0.1 weight pin).
 - Kahlua stdlib: the mocks rely only on standard Lua 5.1-era builtins (table.insert,
   table.remove, ipairs, pairs, setmetatable, getmetatable, type, tostring, select,
   os.time, os.clock, math.sqrt, print). No Kahlua-specific table.* / string.* extensions
@@ -48,6 +58,13 @@ Member notes give arity and return shape only.
 - `getTimeInMillis()` -> integer milliseconds — JASM.
 - `debug` — JASM, fallback only if the host lacks it: `getinfo()` -> info table with a `source` field.
 - core.lua-only extras no mod mock layer needs (informational): isSinglePlayer, getTimestamp, getTimestampMs, getGameTime, Hook.
+- Time pins (0.2.1-rc, aligned to real-engine scales): `getTimestamp()` -> epoch SECONDS
+  (`os.time()`), `getTimestampMs()` -> epoch milliseconds with second resolution
+  (`os.time() * 1000`), `getGameTime()` -> deterministic GameTime stub table —
+  getHours 7, getMinutes 30, getSeconds 0, getDay 1, getHour 7, getMonth 7,
+  getNightsSurvived 0, getWorldAgeHours 0, getMultiplier/getTrueMultiplier 1.0,
+  getTimeOfDay 7.5, getMinutesPerDay 60, daysInMonth 31, persistent `getModData`,
+  `setMultiplier` tonumber-coerce default 1 (only setter).
 
 ### engine globals
 
@@ -130,24 +147,36 @@ any of the three mods.
 9. `OnServerCommand` — JASM
 
 CAF and MAF enumerate exactly their three lifecycle events; JASM and core.lua accept any
-`On*` name. Dispatch-semantics divergence: DISAGREEMENTS D9. core.lua Events (covered:
-core.lua) auto-creates any On* name with Add/Remove/Clear/_fire/_count.
+string-keyed name. Dispatch-semantics divergence: DISAGREEMENTS D9. core.lua Events
+(covered: core.lua) auto-creates any non-empty string key with Add/Remove/Clear/_fire/_count.
 
-Task 6 (2026-11-12) additions on top of the auto-create base:
+0.2.1-rc event-namespace redesign (port of the main-line 2026-11-21 batch):
 
-- Allowlist: `src/gate1/stubs/events_list.lua` returns `{ names = <sorted A->Z> }` —
-  the 9 names above plus core B42 lifecycle `OnTick`, `OnPlayerUpdate` (plan-pinned).
-  Exposed as `_G.__pz_events_list`; `LuaEventManager.AddEvent(name)` (core.lua mock)
-  sorted-inserts into it and creates the `Events[name]` dispatcher, idempotently.
-- Strict tier: only under `_G.pz_strict` (`PZ_STRICT=1`, armed by gate1's runner.lua),
-  indexing an unknown `On*` name on Events/Hook errors `PZ_STRICT: unknown PZ event`.
-  Non-strict behavior unchanged (auto-create).
-- Real-jar probe (gate2, 2026-11-12): the gate2 env exposes NO `LuaEventManager`
-  global at all, and indexing an unknown name on the real `Events` registry returns
-  nil (no auto-create, no error). `OnUnitDeath` (used as a fixture name in the gate1
-  selftest) does not exist in the real registry — it is not a real B42 event.
-  `OnGameStart` / `OnTick` / `OnPlayerUpdate` from the allowlist DO exist there.
-  Events allowlist + strict tier is therefore gate1-only surface until Phase 6 parity.
+- Allowlist: `src/gate1/stubs/events_list.lua` returns the split shape
+  `{ events = <sorted A->Z>, hooks = <sorted A->Z> }` — no merged `names` key.
+  `events` is EXHAUSTIVE: the FULL real engine boot registry (263 `pairs(Events)` names
+  at gate2 runtime, split 217 On* + 46 non-On) plus the 3 Lua-side ISSearchManager
+  registrations = 266; `hooks` is the complete 8 `LuaHookManager` keys (UseItem, Attack,
+  CalculateStats, WeaponSwing, WeaponSwingHitPoint, WeaponHitCharacter, ContextualAction,
+  AutoDrink). Exposed as `_G.__pz_events_list`.
+- Auto-create: any non-empty string key on Events/Hook creates a dispatcher (numeric keys
+  stay nil). Strict tier: under `PZ_STRICT=1` the key must be in its OWN registry's
+  allowlist (Events consults the Umbrella extension; Hook does not — the real
+  namespaces are disjoint) or it errors `PZ_STRICT: unknown PZ event '<Registry>.<key>'`.
+  Cross-namespace names (e.g. `Hook.OnTick`, `Events.UseItem`) fail strict.
+- `LuaEventManager.AddEvent(name)` sorted-inserts into the `events` allowlist only and
+  creates the `Events[name]` dispatcher, idempotently. The `hooks` allowlist is static.
+- Per-test reset (`testkit.resetLoaded` / `PzRequire.reset_events`) clears any
+  stub-created dispatcher on either registry regardless of key name — identified by
+  factory identity (`_G.__pz_is_dispatcher`, weak-keyed set), never by key pattern or
+  duck typing. A hand-built event-like table parked on a registry is NOT cleared. If
+  core.lua is absent, reset_events falls back to the old `^On`+Clear duck-typed clearing
+  with one warn line.
+- Gate2 parity (two-directional, real jar): every shipped name is registered in the real
+  registry (exceptions: exactly the 3 Lua-side ISSearchManager names — the anticipated
+  conditional trading/cheats-UI class verified EMPTY), and every real `pairs(Events)` /
+  `pairs(Hook)` name is shipped. Regenerate `events_list.lua` when the engine adds
+  events; never widen the exceptions set.
 
 ### DISAGREEMENTS
 

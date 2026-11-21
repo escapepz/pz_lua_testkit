@@ -4,9 +4,13 @@
 --   CLI:     lua5.1.exe src/check/check_globals.lua <file-or-dir>... [--stdlib]
 -- Exit codes: 0 clean, 1 unknown globals/events found, 2 usage error.
 -- Known globals: hardcoded baseline + (with --stdlib) a runtime harvest of
--- _G after dofileing src/gate1/stubs/core.lua. Events allowlist comes from
--- src/gate1/stubs/events_list.lua when present. PZ_UMBRELLA symbols are out
--- of scope (deferred; see q9 report).
+-- _G after dofileing src/gate1/stubs/core.lua. Event/hook allowlists come
+-- from src/gate1/stubs/events_list.lua when present ({ events = {...},
+-- hooks = {...} }): Events.<Name> uses are validated against `events`,
+-- Hook.<Name> uses against `hooks`, same findings shape. Any warn path
+-- (missing file, old `names`-only shape, unusable) yields BOTH sets empty
+-- (fail-closed). PZ_UMBRELLA symbols are out of scope (deferred; see q9
+-- report).
 
 local M = {}
 
@@ -24,8 +28,16 @@ local BASELINE = {
 }
 M.BASELINE = BASELINE
 
-local OP_GETGLOBAL, OP_GETTABLE, OP_SETGLOBAL, OP_SETTABLE, OP_SELF
-    = 5, 6, 7, 9, 11
+local OP_MOVE, OP_LOADBOOL, OP_LOADNIL, OP_GETGLOBAL, OP_GETTABLE
+    = 0, 2, 3, 5, 6
+local OP_SETGLOBAL, OP_SETTABLE, OP_SELF, OP_JMP, OP_CALL
+    = 7, 9, 11, 22, 28
+local OP_RETURN, OP_FORLOOP, OP_FORPREP, OP_TFORLOOP, OP_VARARG
+    = 30, 31, 32, 33, 37
+local OP_CLOSURE, OP_SETLIST, OP_CLOSE, OP_SETUPVAL
+    = 36, 34, 35, 8
+local OP_TESTSET, OP_LOADBOOL, OP_EQ, OP_LT, OP_LE, OP_TEST
+    = 27, 2, 23, 24, 25, 26
 
 local function rd_bytes(rd, n)
     local p = rd.pos
@@ -54,11 +66,14 @@ local function rd_string(rd)
     return rd_bytes(rd, len):sub(1, len - 1)
 end
 
-local function add(out, seen, file, line, name, kind)
+local function add(out, seen, file, line, name, kind, registry)
     local key = file .. "\1" .. kind .. "\1" .. name .. "\1" .. line
+        .. "\1" .. tostring(registry)
     if not seen[key] then
         seen[key] = true
-        out[#out + 1] = { file = file, line = line, name = name, kind = kind }
+        local f = { file = file, line = line, name = name, kind = kind }
+        if registry then f.registry = registry end
+        out[#out + 1] = f
     end
 end
 
@@ -77,56 +92,100 @@ local function line_of(lines, pc)
     return line
 end
 
-local function analyze(code, consts, lines, file, out, seen, known, events)
-    local pending_reg
+local function analyze(code, consts, lines, file, out, seen, known, lists, child_nups)
+    local cf_ops = {
+        [OP_JMP] = true, [OP_EQ] = true, [OP_LT] = true, [OP_LE] = true,
+        [OP_TEST] = true, [OP_TESTSET] = true, [29] = true, [OP_RETURN] = true,
+        [OP_FORLOOP] = true, [OP_FORPREP] = true, [OP_TFORLOOP] = true,
+    }
+    local no_write = {
+        [OP_SETGLOBAL] = true, [OP_SETUPVAL] = true, [OP_SETTABLE] = true,
+        [34] = true, [35] = true,
+    }
+    local join = {}
     for pc = 1, #code do
         local ins = code[pc]
         local op = ins % 64
-        if op == OP_GETGLOBAL or op == OP_SETGLOBAL then
-            pending_reg = nil
-            local name = consts[math.floor(ins / 2 ^ 14) % 2 ^ 18 + 1]
-            if type(name) == "string" then
-                local line = line_of(lines, pc)
-                if op == OP_GETGLOBAL and name == "Events" then
-                    local nxt = code[pc + 1]
-                    local key = nil
-                    if nxt then
-                        local nop = nxt % 64
-                        if nop == OP_GETTABLE or nop == OP_SELF then
-                            key = const_key(nxt, consts, 14)
-                        end
-                    end
-                    if key then
-                        if not events[key] then
-                            add(out, seen, file, line, key, "event")
-                        end
-                    else
-                        if not known[name] then
-                            add(out, seen, file, line, name, "read")
-                        end
-                        pending_reg = math.floor(ins / 64) % 256
-                    end
-                elseif not known[name] then
-                    add(out, seen, file, line, name,
-                        op == OP_SETGLOBAL and "write" or "read")
-                end
-            end
-        elseif op == OP_SETTABLE then
-            if pending_reg and math.floor(ins / 64) % 256 == pending_reg then
-                local key = const_key(ins, consts, 23)
-                if key and not events[key] then
-                    add(out, seen, file, line_of(lines, pc), key, "event")
-                end
-            end
+        if op == OP_JMP or op == OP_FORLOOP or op == OP_FORPREP then
+            join[pc + 1 + math.floor(ins / 2 ^ 14) % 2 ^ 18 - 131071] = true
+        elseif op == OP_LOADBOOL and math.floor(ins / 2 ^ 23) % 512 ~= 0 then
+            join[pc + 2] = true
         end
+    end
+
+    local regs = {}
+    local pc = 1
+    while pc <= #code do
+        if join[pc] then regs = {} end
+        local ins = code[pc]
+        local op = ins % 64
+        local a = math.floor(ins / 64) % 256
+        if cf_ops[op] or (op == OP_LOADBOOL
+                and math.floor(ins / 2 ^ 23) % 512 ~= 0) then
+            regs = {}
+        elseif op == OP_GETGLOBAL then
+            local name = consts[math.floor(ins / 2 ^ 14) % 2 ^ 18 + 1]
+            regs[a] = nil
+            if type(name) == "string" then
+                if name == "Events" or name == "Hook" then
+                    regs[a] = name
+                elseif not known[name] then
+                    add(out, seen, file, line_of(lines, pc), name, "read")
+                end
+            end
+        elseif op == OP_SETGLOBAL then
+            local name = consts[math.floor(ins / 2 ^ 14) % 2 ^ 18 + 1]
+            if type(name) == "string" and not known[name] then
+                add(out, seen, file, line_of(lines, pc), name, "write")
+            end
+        elseif op == OP_MOVE then
+            regs[a] = regs[math.floor(ins / 2 ^ 23) % 512]
+        elseif op == OP_GETTABLE or op == OP_SELF then
+            local reg_name = regs[math.floor(ins / 2 ^ 23) % 512]
+            local key = const_key(ins, consts, 14)
+            if reg_name and key then
+                local list = reg_name == "Events" and lists.events or lists.hooks
+                if list and not list[key] then
+                    add(out, seen, file, line_of(lines, pc), key, "event", reg_name)
+                end
+            end
+            regs[a] = nil
+            if op == OP_SELF then regs[a + 1] = nil end
+        elseif op == OP_SETTABLE then
+            local reg_name = regs[a]
+            if reg_name then
+                local key = const_key(ins, consts, 23)
+                if key then
+                    local list = reg_name == "Events" and lists.events or lists.hooks
+                    if list and not list[key] then
+                        add(out, seen, file, line_of(lines, pc), key, "event",
+                            reg_name)
+                    end
+                end
+            end
+        elseif op == OP_LOADNIL then
+            local b = math.floor(ins / 2 ^ 23) % 512
+            for r = a, b do regs[r] = nil end
+        elseif op == OP_CALL or op == OP_VARARG then
+            for r in pairs(regs) do
+                if r >= a then regs[r] = nil end
+            end
+        elseif op == OP_CLOSURE then
+            regs[a] = nil
+            local nups = child_nups and child_nups[math.floor(ins / 2 ^ 14) % 2 ^ 18 + 1]
+            if nups then pc = pc + nups end
+        elseif not no_write[op] then
+            regs[a] = nil
+        end
+        pc = pc + 1
     end
 end
 
-local function walk_proto(rd, file, out, seen, known, events)
+local function walk_proto(rd, file, out, seen, known, lists)
     rd_string(rd)
     rd_uint(rd, rd.intsize)
     rd_uint(rd, rd.intsize)
-    rd_bytes(rd, 4)
+    local nups = rd_bytes(rd, 4):byte(1)
     local ncode = rd_uint(rd, rd.intsize)
     local code = {}
     for i = 1, ncode do code[i] = rd_uint(rd, rd.instrsize) end
@@ -143,8 +202,9 @@ local function walk_proto(rd, file, out, seen, known, events)
         end
     end
     local nprotos = rd_uint(rd, rd.intsize)
+    local child_nups = {}
     for _ = 1, nprotos do
-        walk_proto(rd, file, out, seen, known, events)
+        child_nups[#child_nups + 1] = walk_proto(rd, file, out, seen, known, lists)
     end
     local nlines = rd_uint(rd, rd.intsize)
     local lines = {}
@@ -158,10 +218,11 @@ local function walk_proto(rd, file, out, seen, known, events)
     local nups = rd_uint(rd, rd.intsize)
     for _ = 1, nups do rd_string(rd) end
 
-    analyze(code, consts, lines, file, out, seen, known, events)
+    analyze(code, consts, lines, file, out, seen, known, lists, child_nups)
+    return nups
 end
 
-local function scan_dump(dump, file, out, seen, known, events)
+local function scan_dump(dump, file, out, seen, known, lists)
     if #dump < 12 then error("dump too short", 0) end
     if dump:sub(1, 4) ~= "\27Lua" then error("bad signature", 0) end
     if dump:byte(5) ~= 0x51 then error("need a Lua 5.1 dump", 0) end
@@ -178,7 +239,7 @@ local function scan_dump(dump, file, out, seen, known, events)
         or rd.instrsize < 2 or rd.numsize < 1 or rd.numsize > 8 then
         error("implausible header sizes", 0)
     end
-    walk_proto(rd, file, out, seen, known, events)
+    walk_proto(rd, file, out, seen, known, lists)
 end
 
 local function module_dir()
@@ -219,25 +280,37 @@ local function harvest_stub_globals(warn)
     return out
 end
 
-local function load_events_list(warn)
-    local path = stub_path("events_list.lua")
+-- load_events_list(warn [, path]) -> { events = set, hooks = set }
+--   Consumes the split shape of src/gate1/stubs/events_list.lua. Any warn
+--   path — file missing, load error, old `names`-only shape, otherwise
+--   unusable — warns once and returns BOTH sets empty (fail-closed).
+local function load_events_list(warn, path)
+    path = path or stub_path("events_list.lua")
     local fh = io.open(path, "rb")
     if not fh then
         warn("events allowlist not found: " .. path)
-        return {}
+        return { events = {}, hooks = {} }
     end
     fh:close()
     local ok, list = pcall(dofile, path)
-    local out = {}
-    if ok and type(list) == "table" and type(list.names) == "table" then
-        for _, n in ipairs(list.names) do
-            if type(n) == "string" then out[n] = true end
+    local out = { events = {}, hooks = {} }
+    if ok and type(list) == "table"
+        and type(list.events) == "table" and type(list.hooks) == "table" then
+        for _, n in ipairs(list.events) do
+            if type(n) == "string" then out.events[n] = true end
         end
+        for _, n in ipairs(list.hooks) do
+            if type(n) == "string" then out.hooks[n] = true end
+        end
+    elseif ok and type(list) == "table" and type(list.names) == "table" then
+        warn("events allowlist uses the old 'names'-only shape; treating"
+            .. " events and hooks sets as empty (fail-closed)")
     else
-        warn("events allowlist unusable: " .. tostring(ok and list or list))
+        warn("events allowlist unusable: " .. tostring(list))
     end
     return out
 end
+M.load_events_list = load_events_list
 
 M.known = function(opts)
     opts = opts or {}
@@ -255,29 +328,31 @@ M.known = function(opts)
     return known
 end
 
-M.events_allowlist = function(on_warning)
-    return load_events_list(function(w) if on_warning then on_warning(w) end end)
+M.events_allowlist = function(on_warning, path)
+    local lists = load_events_list(
+        function(w) if on_warning then on_warning(w) end end, path)
+    return lists.events
 end
 
 -- check(paths, opts) -> findings, warnings
 --   findings: sorted list of { file, line, name, kind = "read"|"write"|"event" }
+--     (event-kind findings carry registry = "Events"|"Hook"; format() reads it,
+--     defaulting to "Events")
 --   warnings: per-file warn lines (unreadable / not Lua / walk failure)
---   opts: { stdlib = bool, known = set (overrides), events = set (overrides) }
-local function quoteShellPath(p)
-    if package.config:sub(1, 1) == "\\" then
-        p = p:gsub("/", "\\")
-        if p:match('["\r\n|&^%%]') then return nil end
-        return '"' .. p .. '"'
-    end
-    return "'" .. p:gsub("'", "'\\''") .. "'"
-end
+--   opts: { stdlib = bool, known = set (overrides),
+--           events = set (overrides), hooks = set (overrides) }
+local quoteShellPath = dofile(
+    (debug.getinfo(1, "S").source:sub(2):match("^(.*)[/\\]") or ".")
+        .. "/../gate1/shellpath.lua").quote
 
 M.check = function(paths, opts)
     opts = opts or {}
     local warnings = {}
     local function warn(msg) warnings[#warnings + 1] = msg end
     local known = opts.known or M.known({ stdlib = opts.stdlib, on_warning = warn })
-    local events = opts.events or load_events_list(warn)
+    local lists = load_events_list(warn)
+    if opts.events then lists.events = opts.events end
+    if opts.hooks then lists.hooks = opts.hooks end
     local findings, seen = {}, {}
     for _, path in ipairs(paths or {}) do
         local targets = {}
@@ -320,7 +395,7 @@ M.check = function(paths, opts)
                 if not ok then
                     warn(file .. ": string.dump failed: " .. tostring(dump))
                 else
-                    local ok2, ferr = pcall(scan_dump, dump, file, findings, seen, known, events)
+                    local ok2, ferr = pcall(scan_dump, dump, file, findings, seen, known, lists)
                     if not ok2 then
                         warn(file .. ": bytecode walk failed: " .. tostring(ferr))
                     end
@@ -339,7 +414,8 @@ end
 
 M.format = function(f)
     if f.kind == "event" then
-        return string.format("%s:%d: unknown event 'Events.%s'", f.file, f.line, f.name)
+        return string.format("%s:%d: unknown event '%s.%s'",
+            f.file, f.line, f.registry or "Events", f.name)
     elseif f.kind == "write" then
         return string.format("%s:%d: unknown global '%s' (assigned)", f.file, f.line, f.name)
     end

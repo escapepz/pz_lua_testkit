@@ -20,20 +20,24 @@ inventory lives in `src/gate1/stubs/SURFACE.md` (read it when this file points y
 2. **Strict-safe reads.** Possibly-absent globals MUST be read as
    `rawget(_G, "Name") or default`. NEVER `(Name or default)` — under `PZ_STRICT=1` the
    bare read hits the unknown-global guard and raises `PZ_STRICT: unknown global 'Name'`.
-   This applies to mod code under test AND to spec code. Plain top-level ASSIGNMENT is
-   always free (the guard is read-only).
+   Same rule for possibly-absent EVENTS: `if Events.X then` auto-vivifies a dispatcher
+   (non-strict auto-create) — probe with `rawget(Events, "X")`. This applies to mod code
+   under test AND to spec code. Plain top-level ASSIGNMENT is always free (the guard is
+   read-only).
 3. **Reset asymmetry.** With `reset_per_test` (default ON in mod mode), every test
    starts with: require cache cleared (except `testkit.keep()`-marked and
-   `testkit.provide()`-seeded entries) and every `^On` dispatcher on `Events`/`Hook`
-   Cleared — but top-level `_G` tables created during mod auto-exec SURVIVE. Register
-   event listeners inside functions or re-register in `before_each`; reset any global
-   table's state in `before_each` yourself.
+   `testkit.provide()`-seeded entries) and every stub-created dispatcher on
+   `Events`/`Hook` Cleared (factory-identity based — a hand-built event-like table you
+   park on the registries is NOT cleared) — but top-level `_G` tables created during mod
+   auto-exec SURVIVE. Register event listeners inside functions or re-register in
+   `before_each`; reset any global table's state in `before_each` yourself.
 4. **Mock packs are OPT-IN.** `PZ_STUB_PACKS=game,java` loads the shipped clean-room
    packs. Without the flag those globals don't exist (strict mode will tell you).
    Before inventing a mock, look the class up in `src/gate1/stubs/SURFACE.md` — if it's
    there, enable the pack instead of hand-rolling.
 5. **Strict mode is your typo net, not an obstacle.** `PZ_STRICT=1` turns unknown
-   globals and unknown `Events.OnX`/`Hook.OnX` names into instant errors. When a strict
+   globals and unknown `Events.<Name>`/`Hook.<Name>` names into instant errors — the
+   net covers non-`On` vanilla events and the 8 `Hook` keys too. When a strict
    error fires: fix the spelling, add the missing stub, or switch to `rawget` — NEVER
    disable strict mode to make a failure go away.
 6. **Testkit-scope blockers escalate, never self-patch.** When a blocker's fix belongs
@@ -48,9 +52,13 @@ inventory lives in `src/gate1/stubs/SURFACE.md` (read it when this file points y
    `<workspace>/.pz_testkit/<tag>` → sibling guesses. Read the `RECIPE` table in
    `TESTS/run.lua` first — it declares this mod's `mod`, `specs`, `mod_path`, `ctx`,
    `stub_packs`, `strict`, `reset_per_test`, and (optionally) `EXPECTED_TOTAL`.
+   `RECIPE` and `EXPECTED_TOTAL` are per-workspace conventions defined by the
+   consumer repo's own `TESTS/run.lua` shim — the testkit ships no template;
+   `runner.run(config)` accepts the same keys directly.
 2. **Map the surface before writing tests.** Run the static scanner from the testkit
    root: `tools/lua5.1.exe src/check/check_globals.lua <mod-lua-dir> [--stdlib]`. It
-   walks Lua 5.1 bytecode and lists every global read/write and `Events.<Name>` use —
+   walks Lua 5.1 bytecode and lists every global read/write and `Events.<Name>` /
+   `Hook.<Name>` use —
    including branches that never execute in your tests — with exact line numbers
    (exit 0 clean / 1 findings / 2 usage). Use the report to decide which stubs/packs
    the specs need and which globals are mod-owned vs game-owned.
@@ -79,7 +87,7 @@ toBeCloseTo / toThrow`; `mock(fn)` records calls (`m.calls[1][1]` = first arg of
 | `PZ_REQUIRE: module not found '<name>'`              | Dep name soft-failed nil (stub-by-default posture)                                           | Intentional. `provide()` the dep or configure `PZ_MOD_PATH` if you truly need the real one                                                                       |
 | `PZ_MOD LOAD FAIL <file>: ...`                       | The mod's own Lua crashed during auto-exec (engine load order)                               | Read the inner error: usually `PZ_REQUIRE: load error` (dep) or a strict unknown-global (see next row)                                                           |
 | `PZ_STRICT: unknown global '<name>'`                 | Bare read of a global that doesn't exist yet at that point                                   | If it may legitimately be absent: `rawget(_G, "name") or default`. If it's a typo: fix it. If it's a game global: enable the right `PZ_STUB_PACKS` or add a stub |
-| `PZ_STRICT: unknown PZ event 'Events.OnX'`           | Event name outside the allowlist (typo, or a custom event)                                   | Fix the spelling, or register the custom event first (`LuaEventManager.AddEvent(name)`)                                                                          |
+| `PZ_STRICT: unknown PZ event 'Events.OnX'`           | Event name outside the registry's allowlist (typo, or a custom event not yet registered) — the quoted name may be `Events.<Name>` or `Hook.<Name>`, and non-`On` vanilla events + the 8 `Hook` keys are in scope | Fix the spelling, or register the custom event first (`LuaEventManager.AddEvent(name)` — extends the `Events` allowlist only)                                     |
 | `PZ_STRICT: unknown method 'Class:name'`             | Method miss with Umbrella serve mode on                                                      | Check the class/method in SURFACE.md or the Umbrella clone; fix the call shape                                                                                   |
 | `SPEC LOAD FAIL <path>: <msg>`                       | A spec file itself failed to compile/execute                                                 | Fix the spec (a load failure stops the whole run)                                                                                                                |
 | `STUB PACK MISSING <name>` / `STUB LOAD FAIL <path>` | `PZ_STUB_PACKS` names a pack that doesn't exist / a stub file crashed                        | Fix the pack name (game, java) or the stub file                                                                                                                  |
@@ -94,14 +102,13 @@ fakes:
 
 ```lua
 describe("rules pruner", function()
-    local deps = dofile(<spec_dir> .. "/dep_stubs.lua") -- your builder: returns complete fake tables
+    local deps = dofile(<spec_dir> .. "/dep_stubs.lua")
     before_each(function()
-        testkit.provide("pz_utils_shared", deps.pz_utils())   -- wins over disk, survives reset
+        testkit.provide("pz_utils_shared", deps.pz_utils())
         testkit.provide("zul", deps.zul())
     end)
     it("prunes beyond the limit", function()
-        local pruner = require("rules_pruner")                -- re-executes per test: fresh state
-        -- assertions against pruner behavior with the fake injected
+        local pruner = require("rules_pruner")
     end)
 end)
 ```
@@ -117,11 +124,11 @@ cache-only):
 ```lua
 before_each(function()
     testkit.provide("dep_mod", fake_dep())
-    Events.OnGameStart.Add(handler)        -- re-register per test, or register
-    mod_entry.register_listeners()          -- inside a function the test calls
+    Events.OnGameStart.Add(handler)
+    mod_entry.register_listeners()
 end)
 it("reacts to the event", function()
-    Events.OnGameStart.Run()                -- fire the dispatcher (stub core supports it)
+    Events.OnGameStart._fire()
     expect(fake_dep.observed).toBeTruthy()
 end)
 ```
@@ -132,8 +139,7 @@ end)
 gate2-probed semantics):
 
 ```lua
--- first: read src/gate1/stubs/SURFACE.md for the exact members + shapes
--- then enable, don't re-invent:  RECIPE.stub_packs = { "game" }  (or PZ_STUB_PACKS=game)
+RECIPE.stub_packs = { "game" }
 ```
 
 If a member is missing from SURFACE.md, that is a Part 6 escalation — report it; add it

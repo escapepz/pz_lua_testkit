@@ -1,5 +1,3 @@
---     getCapacityWeight() returns the CURRENT contents weight while
-
 local pzmock = _G.mock
 
 local function umbrellaWrap(obj, class_name)
@@ -215,6 +213,10 @@ function ItemContainer:getItems()
             return #flat
         end,
         get = function(_, i)
+            if i < 0 or i >= #flat then
+                error("IndexOutOfBoundsException: Index: " .. tostring(i)
+                    .. ", Size: " .. tostring(#flat))
+            end
             return flat[i + 1]
         end,
     }
@@ -422,11 +424,7 @@ local function newCorePlayer(id)
         y = 0,
         z = 0,
         square = nil,
-        inventory = {
-            getItems = function()
-                return {}
-            end,
-        },
+        inventory = ItemContainer.new(),
     }
     p.getUsername = pzmock(function(self)
         return self.username

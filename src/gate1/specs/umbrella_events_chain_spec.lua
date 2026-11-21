@@ -26,17 +26,17 @@ end
 
 local function snapshotAllowlist()
     local list = _G.__pz_events_list
-    if not (type(list) == "table" and type(list.names) == "table") then
+    if not (type(list) == "table" and type(list.events) == "table") then
         return nil
     end
     local copy = {}
-    for i, n in ipairs(list.names) do copy[i] = n end
+    for i, n in ipairs(list.events) do copy[i] = n end
     return copy
 end
 
 local function restoreAllowlist(copy)
     if not copy then return end
-    local names = _G.__pz_events_list.names
+    local names = _G.__pz_events_list.events
     for i = #names, 1, -1 do names[i] = nil end
     for i, n in ipairs(copy) do names[i] = n end
 end
@@ -69,7 +69,7 @@ describe("umbrella events extension + chain (Task 4)", function()
         local saved_names = snapshotAllowlist()
         local ok, err = pcall(function()
             initOn()
-            local names = _G.__pz_events_list.names
+            local names = _G.__pz_events_list.events
             local before = #names
             expect(Umbrella.events_lookup("OnFoo")).toBe(true)
             expect(Umbrella.events_lookup("OnBar")).toBe(true)
@@ -99,13 +99,13 @@ describe("umbrella events extension + chain (Task 4)", function()
         local saved_names2 = snapshotAllowlist()
         local ok2, err2 = pcall(function()
             expect(Umbrella.events_lookup("OnFoo")).toBe(false)
-            expect(#_G.__pz_events_list.names).toBe(#saved_names2)
+            expect(#_G.__pz_events_list.events).toBe(#saved_names2)
         end)
         restoreAllowlist(saved_names2)
         if not ok2 then error(err2, 0) end
     end)
 
-    it("(b) strict mode-on: Events.OnFoo dispatcher via existing path + allowlist extended; OnNope still errors; Hook sees the extension too", function()
+    it("(b) strict mode-on: Events.OnFoo dispatcher via umbrella-extended events allowlist; OnNope still errors; Hook does NOT see the extension (umbrella consult is Events-only)", function()
         local saved_strict = _G.pz_strict
         local saved_names = snapshotAllowlist()
         local ok, err = pcall(function()
@@ -127,11 +127,13 @@ describe("umbrella events extension + chain (Task 4)", function()
             expect(called).toBe(1)
 
             local have = {}
-            for _, n in ipairs(_G.__pz_events_list.names) do have[n] = true end
+            for _, n in ipairs(_G.__pz_events_list.events) do have[n] = true end
             expect(have.OnFoo).toBeTruthy()
 
-            expect(type(Hook.OnFoo.Add)).toBe("function")
-            _G.Hook["OnFoo"] = nil
+            local hok, herr = pcall(function() return Hook.OnFoo end)
+            expect(hok).toBe(false)
+            expect(tostring(herr):find("PZ_STRICT: unknown PZ event 'Hook.OnFoo'", 1, true)).toBeTruthy()
+            expect(rawget(Hook, "OnFoo")).toBeNil()
 
             local eok, emsg = pcall(function() return Events.OnNope end)
             expect(eok).toBe(false)
@@ -152,10 +154,10 @@ describe("umbrella events extension + chain (Task 4)", function()
         local ok, err = pcall(function()
             initOn()
             _G.pz_strict = false
-            local before = #_G.__pz_events_list.names
+            local before = #_G.__pz_events_list.events
             expect(type(Events.OnFoo.Add)).toBe("function")
             expect(type(Events.OnNope.Add)).toBe("function")
-            expect(#_G.__pz_events_list.names).toBe(before)
+            expect(#_G.__pz_events_list.events).toBe(before)
         end)
         _G.pz_strict = saved_strict
         restoreAllowlist(saved_names)

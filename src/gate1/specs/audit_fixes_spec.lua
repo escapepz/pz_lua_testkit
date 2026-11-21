@@ -110,7 +110,6 @@ describe("audit fixes #1, #2, #3", function()
         local ok, err = pcall(function()
             print = function() end
 
-            -- (a) strict = true on passing spec restores non-strict _G
             setmetatable(_G, nil)
             rawset(_G, "pz_strict", false)
             local r1 = runner.run({ strict = true, specs = { passSpec } })
@@ -118,7 +117,6 @@ describe("audit fixes #1, #2, #3", function()
             expect(getmetatable(_G)).toBe(nil)
             expect(rawget(_G, "pz_strict")).toBe(false)
 
-            -- (b) strict = true on syntax-error spec (early SPEC LOAD FAIL) restores _G
             setmetatable(_G, nil)
             rawset(_G, "pz_strict", false)
             local r2 = runner.run({ strict = true, specs = { errSpec } })
@@ -126,7 +124,6 @@ describe("audit fixes #1, #2, #3", function()
             expect(getmetatable(_G)).toBe(nil)
             expect(rawget(_G, "pz_strict")).toBe(false)
 
-            -- (c) strict = false nested inside pz_strict = true restores pz_strict and metatable
             local sentinelMeta = { __index = function() return nil end }
             setmetatable(_G, sentinelMeta)
             rawset(_G, "pz_strict", true)

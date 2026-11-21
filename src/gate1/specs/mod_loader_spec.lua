@@ -86,14 +86,9 @@ describe("mod loader e2e probe", function()
         expect(__FIX_ORDER).toEqual({ "common-shared", "42-shared", "42-client", "42-server" })
     end)
     it("require after auto-exec is a cache hit (no re-execution)", function()
-        -- the sibling name resolves against the per-sub roots (root
-        -- .../42/media/lua/shared + "order2.lua") onto the exact path the
-        -- auto-exec already ran -> cache hit, no re-execution
         local m = require("order2")
         expect(m).toBeNil()
         expect(__FIX_ORDER2_N).toBe(1)
-        -- the sub-prefixed form misses the per-sub roots (soft-fail nil, the
-        -- game contract) and must not re-execute either
         local n = require("shared/order2")
         expect(n).toBeNil()
         expect(__FIX_ORDER2_N).toBe(1)
@@ -216,6 +211,35 @@ describe("mod loader (prepare_mod)", function()
         local r1 = runner.prepare_mod(M, "sp")
         local r2 = runner.prepare_mod(M, "sp", { FIX .. "/somewhere_else" })
         expect(r2).toEqual(r1)
+    end)
+
+    it("(h) a directory named *.lua inside media/lua is not a load file", function()
+        local fx = FIX .. "/DirLuaMod"
+        local mkdirp = function(d)
+            if WINDOWS then
+                os.execute('mkdir "' .. (d:gsub("/", "\\")) .. '" 2>nul')
+            else
+                os.execute('mkdir -p "' .. d .. '" 2>/dev/null')
+            end
+        end
+        mkdirp(fx)
+        mkdirp(fx .. "/media/lua/shared")
+        mkdirp(fx .. "/media/lua/shared/zz_dir.lua")
+        local f = io.open(fx .. "/mod.info", "wb")
+        if f then f:write("name=DirLuaMod\nid=dirluamod\n"); f:close() end
+        local ok_file = io.open(fx .. "/media/lua/shared/zz_ok.lua", "wb")
+        if ok_file then ok_file:write("__DIR_LUA_OK = true\n"); ok_file:close() end
+
+        local r = runner.prepare_mod(absPath(fx), "sp")
+        expect(r ~= nil).toBeTruthy()
+        local bad, good = false, false
+        for _, f2 in ipairs(r.load_files) do
+            if f2:match("zz_dir%.lua$") then bad = true end
+            if f2:match("zz_ok%.lua$") then good = true end
+        end
+        expect(bad).toBeFalsy()
+        expect(good).toBeTruthy()
+        expect(#r.load_files).toBe(1)
     end)
 end)
 

@@ -45,4 +45,15 @@ describe("pzspec fresh instance per load", function()
 
         if not ok then error(err, 0) end
     end)
+
+    it("mock: unknown-field reads return nil (no auto-methods); impl=nil calls return nil", function()
+        local m = mock()
+        expect(m.nonexistent).toBeNil()
+        expect(m()).toBeNil()
+        expect(m.calls[1].n).toBe(0)
+
+        local m2 = mock(function() return "impl" end)
+        expect(m2()).toBe("impl")
+        expect(m2.nonexistent).toBeNil()
+    end)
 end)

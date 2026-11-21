@@ -162,6 +162,12 @@ public class PzKahluaRunner {
         installGameEvents(platform, env, cm);
         KahluaThread thread = new KahluaThread(System.out, platform, env);
         thread.debugOwnerThread = Thread.currentThread();
+        try {
+            Class.forName("zombie.Lua.LuaManager")
+                    .getField("thread").set(null, thread);
+        } catch (Throwable t) {
+            System.err.println("[gate2] LuaManager.thread skip: " + t);
+        }
         installGlobalObject(cm, platform, env, thread);
 
         env.rawset("PZ_GATE", "gate2");
@@ -177,9 +183,6 @@ public class PzKahluaRunner {
                 loadLua(thread, kitRoot.resolve("src/vendor/inspect.lua"), env);
         if (inspectResult != null && inspectResult.length > 1
                 && inspectResult[1] instanceof KahluaTable) {
-            // PZ Kahlua's pcall cannot dispatch a __call table ("tried to call
-
-            // instead of the module table; fmt only needs a callable.
             Object fn = ((KahluaTable) inspectResult[1]).rawget("inspect");
             env.rawset("__inspect", fn != null ? fn : inspectResult[1]);
         }
@@ -287,6 +290,18 @@ public class PzKahluaRunner {
                 t = t.getCause();
             }
             System.err.println("[gate2] LuaEventManager unavailable: " + t);
+        }
+        try {
+            Class<?> hookMgr = Class.forName("zombie.Lua.LuaHookManager");
+            Method hookReg = hookMgr.getMethod("register",
+                    Platform.class, KahluaTable.class);
+            hookReg.invoke(null, platform, env);
+        } catch (Throwable t) {
+            while (t instanceof java.lang.reflect.InvocationTargetException
+                    && t.getCause() != null) {
+                t = t.getCause();
+            }
+            System.err.println("[gate2] LuaHookManager unavailable: " + t);
         }
     }
 
@@ -597,7 +612,6 @@ public class PzKahluaRunner {
              .sorted((a, b) -> a.getFileName().toString().compareTo(b.getFileName().toString()))
              .forEach(out::add);
         } catch (Exception e) {
-            // ignore unreadable directory
         }
         return out;
     }
@@ -800,7 +814,6 @@ public class PzKahluaRunner {
                     }
                 }
             } catch (Exception ignored) {
-                // Ignore invalid paths or I/O errors and try next root.
             }
         }
         return null;
