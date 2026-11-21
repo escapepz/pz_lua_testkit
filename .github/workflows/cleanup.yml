@@ -1,0 +1,26 @@
+name: Cleanup Stale Workflow Runs
+
+on:
+  schedule:
+    # Weekly, Sunday 00:00 UTC — retention is 7 days, so a weekly sweep is
+    # the slowest cadence that still honors it
+    - cron: '0 0 * * 0'
+  workflow_dispatch: # Allows manual trigger from the Actions tab
+
+# Deleting workflow runs needs the actions:write scope; declared explicitly
+# so the job also works if default GITHUB_TOKEN permissions are read-only.
+permissions:
+  actions: write
+
+jobs:
+  del_runs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 7 # Keep runs from the last 7 days
+          keep_minimum_runs: 5 # Keep at least 5 runs per workflow

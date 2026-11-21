@@ -1,7 +1,10 @@
 -- pzrequire.lua — gate1 contract require module (Phase 3 mod loader core,
 -- plan Task 1, provide seeding Task 3). Owns the in-engine require semantics
 -- the mod loader (Task 2) installs in mod mode: normalized path-keyed
--- execute-once cache, ordered first-hit root scan, soft-fail warn+nil on
+-- execute-once cache (the key is cache identity only — loadfile always
+-- gets the first-seen real path, so POSIX absolute roots keep their
+-- leading '/'; case folding stays Windows-only), ordered first-hit root
+-- scan, soft-fail warn+nil on
 -- miss, circular re-entry guard, provide-seeded stub entries, and the
 -- testkit facade (resetLoaded / keep / provide / std_require).
 --
@@ -46,6 +49,7 @@ PzRequire._done = {}
 PzRequire._value = {}
 PzRequire._inflight = {}
 PzRequire._persistent = {}
+PzRequire._paths = {}
 PzRequire._std = nil
 
 local installed = false
@@ -111,6 +115,7 @@ function PzRequire.init(roots)
     PzRequire._value = {}
     PzRequire._inflight = {}
     PzRequire._persistent = {}
+    PzRequire._paths = {}
     for _, r in ipairs(roots or {}) do
         local dir = normalizeKey(r)
         if dirHasEntries(dir) then
@@ -135,7 +140,11 @@ function PzRequire.resolve(name)
             local _, rerr = f:read(1)
             f:close()
             if rerr == nil then
-                return cacheKey(cand)
+                local key = cacheKey(cand)
+                if PzRequire._paths[key] == nil then
+                    PzRequire._paths[key] = normalizeKey(cand)
+                end
+                return key
             end
         end
     end
@@ -143,7 +152,8 @@ function PzRequire.resolve(name)
 end
 
 function PzRequire.require_file(abs_path)
-    local key = cacheKey(abs_path)
+    local real = normalizeKey(abs_path)
+    local key = cacheKey(real)
     if PzRequire._done[key] then
         return PzRequire._value[key]
     end
@@ -151,7 +161,9 @@ function PzRequire.require_file(abs_path)
         print("PZ_REQUIRE: circular require of '" .. key .. "' skipped")
         return nil
     end
-    local chunk, err = loadfile(key)
+    local load_path = PzRequire._paths[key] or real
+    PzRequire._paths[key] = load_path
+    local chunk, err = loadfile(load_path)
     if not chunk then
         error("PZ_REQUIRE: load error in '" .. key .. "': " .. tostring(err), 0)
     end

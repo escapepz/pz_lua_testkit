@@ -50,6 +50,16 @@ local function buildFixture(fx)
         [U .. "/shared/broken.lua"] = "this is not = valid lua\n",
         [fx .. "/root_b/shared/util.lua"] = 'return { marker = "shadow" }\n',
     }
+    if not WINDOWS then
+        -- POSIX case-sensitivity counterpart of shared/util.lua, written at
+        -- the exact cased path (l5) requires: 'Shared/Util' (both segments).
+        -- Content stays identical: on case-insensitive non-Windows FS
+        -- (macOS) both paths hit one real file, so last-write-wins must not
+        -- diverge.
+        mkdirp(U .. "/Shared")
+        files[U .. "/Shared/Util.lua"] =
+            '__FIX_UTIL_N = (rawget(_G, "__FIX_UTIL_N") or 0) + 1\nreturn { marker = "util" }\n'
+    end
     for path, content in pairs(files) do
         local f = io.open(path, "wb")
         if f then

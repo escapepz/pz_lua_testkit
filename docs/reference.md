@@ -192,7 +192,7 @@ jobs:
 
       - name: Setup pz_lua_testkit
         id: testkit
-        uses: escapepz/pz_lua_testkit@0.2.1-rc.202611211559
+        uses: escapepz/pz_lua_testkit@0.2.1-rc.202611211738
 
       - name: Run mod tests (strict)
         env:

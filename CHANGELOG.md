@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1-rc.202611211738] - 2026-11-21
+
+### Fixed
+- **CI npm-pack assertion never had a manifest to grep (`.github/workflows/ci.yml`):** `npm pack --dry-run` writes its `npm notice` report to STDERR, so `npm pack --dry-run | tee pack_manifest.txt` teed an EMPTY file and every critical-path grep failed with a bogus `MISSING from npm package: src/gate1/run.lua` — on the step's first-ever execution (all previous CI rounds died at Gate 1 before reaching it). The step now merges stderr (`npm pack --dry-run 2>&1 | tee ...`). Verified with the exact step block locally (npm 11.20.0) and on the Debian VM (npm 10.9.7 — CI's npm major): all 5 critical paths grep green.
+
+## [0.2.1-rc.202611211728] - 2026-11-21
+
+### Changed
+- **Workflow run cleanup (`.github/workflows/cleanup.yml`):** weekly scheduled sweep deleting stale workflow runs — 7-day retention with a minimum of 5 runs kept per workflow; `actions: write` declared explicitly so the job also works under read-only default GITHUB_TOKEN permissions. Manual trigger available via `workflow_dispatch`.
+
+### Fixed
+- **Gate 1 (l5) case-variant must live at the exact required path (`src/gate1/specs/pzrequire_spec.lua`):** the 202611211718 attempt wrote the fixture file under lowercase `shared/`, but (l5) requires `Shared/Util` — Linux keeps BOTH segments case-sensitive, so the file stayed invisible (`module not found`, count stuck at 1; CI round 3 red with the same expect). The variant now lands at `Shared/Util.lua` (capital-S dir created too), content identical to `util.lua` so case-insensitive non-Windows FS (macOS) cannot diverge on last-write-wins. Proven on a real Debian VM before push: Gate 1 default 280/280, strict 280/280, and the `--mod` fixture step 1/1 — the first Linux run ever to reach that CI step.
+
+## [0.2.1-rc.202611211718] - 2026-11-21
+
+### Fixed
+- **Gate 1 (l5) fixture never shipped its POSIX case-variant (`src/gate1/specs/pzrequire_spec.lua`):** the spec expects `N=2` on POSIX — case folding is Windows-only, so a differently-cased require must be a separate execution — but `buildFixture` only ever wrote lowercase `shared/util.lua`, so `require("Shared/Util")` warned not-found and the count stayed 1. Latent since the spec was written; first Linux exposure was this cycle's CI (the 0.2.x code had never reached a `main` push before). `buildFixture` now writes `shared/Util.lua` on non-Windows with content identical to `util.lua` — on case-insensitive non-Windows FS (macOS) both names hit one real file, so last-write-wins must not diverge. Windows fixture and expectations unchanged.
+
+## [0.2.1-rc.202611211706] - 2026-11-21
+
+### Fixed
+- **Gate 1 require on POSIX absolute roots (`src/gate1/stubs/pzrequire.lua`):** the canonical cache key collapsed empty segments, so a POSIX absolute root (`/home/...`) lost its leading `/` when the key was reused as the `loadfile` path — every require from an absolute root failed with `No such file or directory` on Linux (CI red at 276/280: mod deps (f)(g)(h) + pzrequire (l5)); Windows never saw it because drive-letter keys (`E:/...`) stay loadable. The key is cache identity only now: `_paths` maps each key to its first-seen real path and `loadfile` always loads the real path; `resolve()` still returns the canonical key and error messages still quote the key — the (j)/(q)/(l5) pins are unchanged.
+
 ## [0.2.1-rc.202611211559] - 2026-11-21
 
 ### Consumer-visible behavior changes
@@ -71,7 +94,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial public npm release (`pz_lua_testkit`) with Gate 1 (`pzspec`, clean-room stubs, `modloader`, `pzrequire`, `Umbrella` serve mode), `check_globals.lua` Lua 5.1 bytecode scanner, `sweep_consumers.lua`, and `.agents/skills/pz-lua-testkit/`.
 - Verified Gate 2 parity against local Project Zomboid B42 JAR (including `events_parity_spec.lua`).
 
-[Unreleased]: https://github.com/escapepz/pz_lua_testkit/compare/0.2.1-rc.202611211559...HEAD
+[Unreleased]: https://github.com/escapepz/pz_lua_testkit/compare/0.2.1-rc.202611211738...HEAD
+[0.2.1-rc.202611211738]: https://github.com/escapepz/pz_lua_testkit/compare/0.2.1-rc.202611211728...0.2.1-rc.202611211738
+[0.2.1-rc.202611211728]: https://github.com/escapepz/pz_lua_testkit/compare/0.2.1-rc.202611211718...0.2.1-rc.202611211728
+[0.2.1-rc.202611211718]: https://github.com/escapepz/pz_lua_testkit/compare/0.2.1-rc.202611211706...0.2.1-rc.202611211718
+[0.2.1-rc.202611211706]: https://github.com/escapepz/pz_lua_testkit/compare/0.2.1-rc.202611211559...0.2.1-rc.202611211706
 [0.2.1-rc.202611211559]: https://github.com/escapepz/pz_lua_testkit/compare/0.2.1-rc.202611211058...0.2.1-rc.202611211559
 [0.2.1-rc.202611211058]: https://github.com/escapepz/pz_lua_testkit/compare/0.1.2-rc.202611190505...0.2.1-rc.202611211058
 [0.1.2-rc.202611190505]: https://github.com/escapepz/pz_lua_testkit/compare/0.1.1...0.1.2-rc.202611190505
